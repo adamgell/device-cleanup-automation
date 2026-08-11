@@ -157,3 +157,21 @@ variable "log_analytics_workspace_id" {
   type        = string
   default     = null
 }
+
+variable "alert_digest_enabled" {
+  description = "Also alert (Sev4 informational) with the RUN SUMMARY counters after every completed run."
+  type        = bool
+  default     = false
+}
+
+variable "alert_max_delete_count" {
+  description = "Alert (Sev2) when a run's ToDelete counter exceeds this. 0 disables the threshold alert."
+  type        = number
+  default     = 0
+}
+
+variable "alert_webhook_urls" {
+  description = "name => URL map of webhook receivers on the action group (Teams Workflows incoming-webhook URLs or generic endpoints). Common alert schema."
+  type        = map(string)
+  default     = {}
+}
