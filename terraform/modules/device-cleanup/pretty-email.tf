@@ -9,6 +9,11 @@
 locals {
   acs_endpoint = var.pretty_email_enabled ? "https://acs-devicecleanup-${var.environment}.communication.azure.com" : null
 
+  # Log Analytics customer GUID for the query API. Attachments require the
+  # module-created workspace (BYO workspace id carries no GUID we can query).
+  pe_ws_guid = try(azurerm_log_analytics_workspace.alerting[0].workspace_id, null)
+  pe_nl      = "decodeUriComponent('%0A')"
+
   # Logic App expressions evaluated per-alert at run time.
   pe_essentials = "triggerBody()?['data']?['essentials']"
   pe_severity   = "coalesce(triggerBody()?['data']?['essentials']?['severity'], 'Sev4')"
@@ -98,12 +103,106 @@ resource "azurerm_role_assignment" "pretty_email_acs" {
   principal_id         = azurerm_logic_app_workflow.pretty_email[0].identity[0].principal_id
 }
 
+resource "azurerm_role_assignment" "pretty_email_law" {
+  count = var.pretty_email_enabled ? 1 : 0
+
+  scope                = local.log_analytics_workspace_id
+  role_definition_name = "Log Analytics Reader"
+  principal_id         = azurerm_logic_app_workflow.pretty_email[0].identity[0].principal_id
+}
+
 resource "azurerm_logic_app_trigger_http_request" "pretty_email" {
   count = var.pretty_email_enabled ? 1 : 0
 
   name         = "common-alert-schema"
   logic_app_id = azurerm_logic_app_workflow.pretty_email[0].id
   schema       = "{}"
+}
+
+# Fetch recent job-stream text (failure attachment source).
+resource "azurerm_logic_app_action_custom" "pretty_email_get_streams" {
+  count = var.pretty_email_enabled ? 1 : 0
+
+  name         = "get-job-streams"
+  logic_app_id = azurerm_logic_app_workflow.pretty_email[0].id
+
+  body = jsonencode({
+    type = "Http"
+    inputs = {
+      method  = "POST"
+      uri     = "https://api.loganalytics.io/v1/workspaces/${local.pe_ws_guid}/query"
+      headers = { "Content-Type" = "application/json" }
+      body = {
+        query = "AzureDiagnostics | where Category == 'JobStreams' and TimeGenerated > ago(2h) | order by TimeGenerated asc | project TimeGenerated, JobId_g, ResultDescription"
+      }
+      authentication = {
+        type     = "ManagedServiceIdentity"
+        audience = "https://api.loganalytics.io"
+      }
+    }
+    runAfter = {}
+  })
+}
+
+# Fetch the latest run's device-results JSON array (digest CSV source).
+resource "azurerm_logic_app_action_custom" "pretty_email_get_devices" {
+  count = var.pretty_email_enabled ? 1 : 0
+
+  name         = "get-device-json"
+  logic_app_id = azurerm_logic_app_workflow.pretty_email[0].id
+
+  body = jsonencode({
+    type = "Http"
+    inputs = {
+      method  = "POST"
+      uri     = "https://api.loganalytics.io/v1/workspaces/${local.pe_ws_guid}/query"
+      headers = { "Content-Type" = "application/json" }
+      body = {
+        query = "let rows = AzureDiagnostics | where Category == 'JobStreams' and StreamType_s == 'Output' and TimeGenerated > ago(6h) and ResultDescription startswith '[CSVROW]'; let latest = toscalar(rows | top 1 by TimeGenerated desc | project JobId_g); rows | where JobId_g == latest | order by TimeGenerated asc | project ResultDescription"
+      }
+      authentication = {
+        type     = "ManagedServiceIdentity"
+        audience = "https://api.loganalytics.io"
+      }
+    }
+    runAfter = {}
+  })
+}
+
+resource "azurerm_logic_app_action_custom" "pretty_email_log_lines" {
+  count = var.pretty_email_enabled ? 1 : 0
+
+  name         = "select-log-lines"
+  logic_app_id = azurerm_logic_app_workflow.pretty_email[0].id
+
+  body = jsonencode({
+    type = "Select"
+    inputs = {
+      from   = "@coalesce(body('get-job-streams')?['tables']?[0]?['rows'], createArray())"
+      select = "@concat(item()[0], '  ', item()[2])"
+    }
+    runAfter = {
+      "get-job-streams" = ["Succeeded", "Failed"]
+    }
+  })
+}
+
+resource "azurerm_logic_app_action_custom" "pretty_email_csv_lines" {
+  count = var.pretty_email_enabled ? 1 : 0
+
+  name         = "select-csv-lines"
+  logic_app_id = azurerm_logic_app_workflow.pretty_email[0].id
+
+  body = jsonencode({
+    type = "Select"
+    inputs = {
+      from   = "@coalesce(body('get-device-json')?['tables']?[0]?['rows'], createArray())"
+      select = "@substring(item()[0], 9)"
+    }
+    runAfter = {
+      "get-device-json" = ["Succeeded", "Failed"]
+    }
+  })
 }
 
 resource "azurerm_logic_app_action_custom" "pretty_email_send" {
@@ -132,6 +231,7 @@ resource "azurerm_logic_app_action_custom" "pretty_email_send" {
           subject = "@{concat('Device Cleanup ', ${local.pe_condition}, ' (', ${local.pe_severity}, '): ', coalesce(${local.pe_essentials}?['alertRule'], 'alert'))}"
           html    = local.pe_html
         }
+        attachments = "@if(contains(coalesce(${local.pe_essentials}?['alertRule'], ''), 'job-failed'), json(concat('[{\"name\":\"job-streams.txt\",\"contentType\":\"text/plain\",\"contentInBase64\":\"', base64(join(coalesce(body('select-log-lines'), createArray()), ${local.pe_nl})), '\"}]')), if(contains(coalesce(${local.pe_essentials}?['alertRule'], ''), 'run-digest'), json(concat('[{\"name\":\"devices.csv\",\"contentType\":\"text/csv\",\"contentInBase64\":\"', base64(concat(join(coalesce(body('select-csv-lines'), createArray()), ${local.pe_nl}))), '\"}]')), json('[]')))"
       }
       authentication = {
         type     = "ManagedServiceIdentity"
@@ -143,6 +243,9 @@ resource "azurerm_logic_app_action_custom" "pretty_email_send" {
         interval = "PT20S"
       }
     }
-    runAfter = {}
+    runAfter = {
+      "select-log-lines" = ["Succeeded", "Failed", "Skipped"]
+      "select-csv-lines" = ["Succeeded", "Failed", "Skipped"]
+    }
   })
 }
