@@ -175,3 +175,15 @@ variable "alert_webhook_urls" {
   type        = map(string)
   default     = {}
 }
+
+variable "pretty_email_enabled" {
+  description = "Send composed HTML alert emails via ACS + Logic App (in addition to any plain action-group emails)."
+  type        = bool
+  default     = false
+}
+
+variable "pretty_email_recipients" {
+  description = "Recipients of the pretty HTML alert emails. Required non-empty when pretty_email_enabled."
+  type        = list(string)
+  default     = []
+}
