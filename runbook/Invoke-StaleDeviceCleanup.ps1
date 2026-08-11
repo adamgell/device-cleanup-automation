@@ -1079,6 +1079,17 @@ if ($BackupBLandLAPs -and $KeyVaultName) {
 Write-Log '===== PER-DEVICE RESULTS (JSON) ====='
 Write-Output ($results | ConvertTo-Json -Depth 4)
 
+# One [CSVROW] line per device: Log Analytics truncates large stream entries,
+# so the JSON block above is unusable for downstream consumers. Small
+# per-device lines survive intact; the pretty-email Logic App reassembles
+# them into the devices.csv attachment.
+$csvQuote = { param($v) '"' + ([string]$v -replace '"', '""') + '"' }
+Write-Output ('[CSVROW] ' + (@('DisplayName','DeviceId','OS','TrustType','LastSignInUtc','AgeDays','OwnerUPN','Stage','Action','Status') -join ','))
+foreach ($r in $results) {
+    $fields = foreach ($p in 'DisplayName','DeviceId','OS','TrustType','LastSignInUtc','AgeDays','OwnerUPN','Stage','Action','Status') { & $csvQuote $r.$p }
+    Write-Output ('[CSVROW] ' + ($fields -join ','))
+}
+
 if ($autopilotStale.Count -gt 0) {
     Write-Log '===== AUTOPILOT-PROTECTED DEVICES (JSON) -- NOT modified ====='
     Write-Output ($autopilotStale | ConvertTo-Json -Depth 4)
