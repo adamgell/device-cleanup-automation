@@ -99,3 +99,18 @@ variable "log_analytics_workspace_id" {
   type    = string
   default = null
 }
+
+variable "alert_digest_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "alert_max_delete_count" {
+  type    = number
+  default = 0
+}
+
+variable "alert_webhook_urls" {
+  type    = map(string)
+  default = {}
+}

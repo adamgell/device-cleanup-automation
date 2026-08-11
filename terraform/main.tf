@@ -16,6 +16,9 @@ module "device_cleanup" {
 
   alerting_enabled           = var.alerting_enabled
   alert_email_addresses      = var.alert_email_addresses
+  alert_digest_enabled       = var.alert_digest_enabled
+  alert_max_delete_count     = var.alert_max_delete_count
+  alert_webhook_urls         = var.alert_webhook_urls
   log_analytics_workspace_id = var.log_analytics_workspace_id
 
   enable_apply             = var.enable_apply
