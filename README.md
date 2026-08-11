@@ -11,6 +11,22 @@ tenant-identifying belongs in tracked files.
 Alerting: `docs/2026-08-11-alerting-request.md` — phase 1 (email) shipped; Teams /
 SharePoint / webhook phases add receivers to the same action group.
 
+## Flow 
+
+```mermaid
+flowchart TD
+    A[Weekly schedule or manual job\nAzure Automation runbook] --> B[Auth: system-assigned managed identity\nno stored credentials, 6 Graph app roles]
+    B --> C[Query Entra devices\nlast sign-in age per device]
+    C --> D{Age?}
+    D -->|"< 90 days"| E[Untouched]
+    D -->|"90–120 days"| F[Stage: Disable\ndevice disabled, reversible]
+    D -->|"120+ days"| G[Stage: Hard delete]
+    G --> H[Safety checks:\nAutopilot serial cross-check,\nOS filter, curated-list mode]
+    H --> I[Backup first:\nBitLocker keys + LAPS creds\n→ Key Vault, JSON per device]
+    I --> J[Delete Entra object +\nIntune record + Autopilot registration]
+    J --> K[Job output = audit evidence\nsecrets never in logs]
+    K --> L[Key Vault retention:\nsecrets auto-purged after N days\n= rollback window]
+```    
 ## Layout
 
 - `source/Div-CleanupEntra-Intune-AP-Devices.ps1` — Matt's original delegated/interactive
