@@ -11,7 +11,8 @@ untested → **Done** / Blocked.
 | 2 | Run-completed digest alert (RUN SUMMARY counters, Sev4, `alert_digest_enabled`) | 1.5 | **Done** | Fired 2026-08-11 20:35Z after a DryRun run; email received with 9 counter lines in search results. |
 | 3 | Would-delete threshold (Sev2, `alert_max_delete_count`) + BackupFailed>0 (Sev1, always on) | 1.5 | **Done** | Threshold fired 2026-08-11 20:42Z (66 would-delete > 50). BackupFailed correctly silent on a clean run (negative test; positive path shares the tested JobStreams extraction pattern). |
 | 4 | Teams channel notifications (Workflows webhook receiver) | 2 | Built; delivery mechanism proven via #6 | Blocked on a Teams Workflows incoming-webhook URL (channel owner creates interactively). Owner: Adam. Wiring is one tfvars entry in `alert_webhook_urls`. |
-| 5 | SharePoint list run-history via Logic App (+ pretty HTML digest) | 3 | Blocked | SharePoint connector needs interactive OAuth consent — cannot be automated. Owner: Adam, next working session. |
+| 5a | Pretty HTML alert emails (ACS + Logic App, `pretty_email_enabled`) | 3 | **Done** | Live 2026-08-11: direct payload test + real alert notifications (incl. Resolved) delivered via action group → Logic App → ACS to inbox. Gotcha: Microsoft.Communication provider must be registered once per subscription. |
+| 5b | SharePoint list run-history via Logic App | 3 | Blocked | SharePoint connector needs interactive OAuth consent — cannot be automated. Owner: Adam, next working session. |
 | 6 | Generic webhook receivers (common alert schema, `alert_webhook_urls`) | 3 | **Done** | 3 POSTs (one per fired alert) received by the HTTP-trigger Logic App in the demo RG, 2026-08-11. |
 | 7 | Restore truncated tail of `source/` original script | — | Blocked | Original not published anywhere public (verified 2026-08-11). Owner: Adam to request the complete file from the author. Runbook already rebuilds the tail. |
 
