@@ -15,7 +15,7 @@ untested → **Done** / Blocked.
 | 5c | Email attachments: job-streams.txt on failures, devices.csv on digests | 3 | **Done** | Both verified in inbox 2026-08-11. Gotchas: LA truncates large stream entries (hence per-device [CSVROW] runbook lines, not the JSON blob); the LA query API path rejects multi-statement `let` KQL (single-statement toscalar subquery instead); Logic Apps `createArray()` requires ≥1 arg — use `json('[]')` for empty. |
 | 5b | SharePoint list run-history via Logic App | 3 | Blocked | SharePoint connector needs interactive OAuth consent — cannot be automated. Owner: Adam, next working session. |
 | 6 | Generic webhook receivers (common alert schema, `alert_webhook_urls`) | 3 | **Done** | 3 POSTs (one per fired alert) received by the HTTP-trigger Logic App in the demo RG, 2026-08-11. |
-| 7 | Restore truncated tail of `source/` original script | — | Blocked | Original not published anywhere public (verified 2026-08-11). Owner: Adam to request the complete file from the author. Runbook already rebuilds the tail. |
+| 7 | Restore truncated tail of `source/` original script | — | **Done** | Resolved 2026-08-11: author's complete Unified script (3 auth modes) + earlier ManagedIdentity variant added to source/, credentials sanitized. The delegated file is truncated in the author's own copy (byte-identical diff), so its truncation is inherited, not damage — Unified carries the full tail. |
 
 ## Definition of done
 

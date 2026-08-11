@@ -29,9 +29,15 @@ flowchart TD
 ```    
 ## Layout
 
-- `source/Div-CleanupEntra-Intune-AP-Devices.ps1` — Matt's original delegated/interactive
-  script, preserved verbatim. NOTE: this copy is truncated at line 1090 (mid "secrets CSV"
-  comment); the runbook rebuilds the missing summary/disconnect tail.
+- `source/` — Matt's original scripts, preserved for reference (credential values
+  sanitized to blanks):
+  - `Invoke-EntraIdStaleDeviceCleanup-Unified.ps1` — the authoritative, complete
+    version: one script, three auth modes (AppRegistration / Delegated / ManagedIdentity).
+  - `Invoke-EntraIdStaleDeviceCleanup-ManagedIdentity.ps1` — earlier MI-only variant
+    (no Intune/Autopilot deletion, blob-storage output).
+  - `Div-CleanupEntra-Intune-AP-Devices.ps1` — delegated variant the runbook was
+    ported from. Truncated at line 1090 in the original source itself (verified
+    against the author's own copy); the Unified script contains the full tail.
 - `runbook/Invoke-StaleDeviceCleanup.ps1` — the Automation port. Every original configuration
   option survives as a runbook parameter with the same default. Environment-forced changes only:
   managed-identity auth, job-stream output, Key Vault secret backup with retention cleanup,
