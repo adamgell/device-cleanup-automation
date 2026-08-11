@@ -158,7 +158,7 @@ resource "azurerm_logic_app_action_custom" "pretty_email_get_devices" {
       uri     = "https://api.loganalytics.io/v1/workspaces/${local.pe_ws_guid}/query"
       headers = { "Content-Type" = "application/json" }
       body = {
-        query = "let rows = AzureDiagnostics | where Category == 'JobStreams' and StreamType_s == 'Output' and TimeGenerated > ago(6h) and ResultDescription startswith '[CSVROW]'; let latest = toscalar(rows | top 1 by TimeGenerated desc | project JobId_g); rows | where JobId_g == latest | order by TimeGenerated asc | project ResultDescription"
+        query = "AzureDiagnostics | where Category == 'JobStreams' and StreamType_s == 'Output' and TimeGenerated > ago(6h) and ResultDescription startswith '[CSVROW]' | where JobId_g == toscalar(AzureDiagnostics | where Category == 'JobStreams' and StreamType_s == 'Output' and TimeGenerated > ago(6h) and ResultDescription startswith '[CSVROW]' | top 1 by TimeGenerated desc | project JobId_g) | order by TimeGenerated asc | project ResultDescription"
       }
       authentication = {
         type     = "ManagedServiceIdentity"
@@ -178,7 +178,7 @@ resource "azurerm_logic_app_action_custom" "pretty_email_log_lines" {
   body = jsonencode({
     type = "Select"
     inputs = {
-      from   = "@coalesce(body('get-job-streams')?['tables']?[0]?['rows'], createArray())"
+      from   = "@coalesce(body('get-job-streams')?['tables']?[0]?['rows'], json('[]'))"
       select = "@concat(item()[0], '  ', item()[2])"
     }
     runAfter = {
@@ -196,7 +196,7 @@ resource "azurerm_logic_app_action_custom" "pretty_email_csv_lines" {
   body = jsonencode({
     type = "Select"
     inputs = {
-      from   = "@coalesce(body('get-device-json')?['tables']?[0]?['rows'], createArray())"
+      from   = "@coalesce(body('get-device-json')?['tables']?[0]?['rows'], json('[]'))"
       select = "@substring(item()[0], 9)"
     }
     runAfter = {
@@ -231,7 +231,7 @@ resource "azurerm_logic_app_action_custom" "pretty_email_send" {
           subject = "@{concat('Device Cleanup ', ${local.pe_condition}, ' (', ${local.pe_severity}, '): ', coalesce(${local.pe_essentials}?['alertRule'], 'alert'))}"
           html    = local.pe_html
         }
-        attachments = "@if(contains(coalesce(${local.pe_essentials}?['alertRule'], ''), 'job-failed'), json(concat('[{\"name\":\"job-streams.txt\",\"contentType\":\"text/plain\",\"contentInBase64\":\"', base64(join(coalesce(body('select-log-lines'), createArray()), ${local.pe_nl})), '\"}]')), if(contains(coalesce(${local.pe_essentials}?['alertRule'], ''), 'run-digest'), json(concat('[{\"name\":\"devices.csv\",\"contentType\":\"text/csv\",\"contentInBase64\":\"', base64(concat(join(coalesce(body('select-csv-lines'), createArray()), ${local.pe_nl}))), '\"}]')), json('[]')))"
+        attachments = "@if(contains(coalesce(${local.pe_essentials}?['alertRule'], ''), 'job-failed'), json(concat('[{\"name\":\"job-streams.txt\",\"contentType\":\"text/plain\",\"contentInBase64\":\"', base64(join(coalesce(body('select-log-lines'), json('[]')), ${local.pe_nl})), '\"}]')), if(contains(coalesce(${local.pe_essentials}?['alertRule'], ''), 'run-digest'), json(concat('[{\"name\":\"devices.csv\",\"contentType\":\"text/csv\",\"contentInBase64\":\"', base64(concat(join(coalesce(body('select-csv-lines'), json('[]')), ${local.pe_nl}))), '\"}]')), json('[]')))"
       }
       authentication = {
         type     = "ManagedServiceIdentity"
