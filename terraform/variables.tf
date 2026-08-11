@@ -114,3 +114,13 @@ variable "alert_webhook_urls" {
   type    = map(string)
   default = {}
 }
+
+variable "pretty_email_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "pretty_email_recipients" {
+  type    = list(string)
+  default = []
+}

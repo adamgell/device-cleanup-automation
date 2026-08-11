@@ -91,7 +91,10 @@ resource "azurerm_monitor_action_group" "alerts" {
   # Serves both Teams (a Workflows incoming-webhook URL) and generic
   # endpoints (SIEM/ticketing/PSA). Common alert schema either way.
   dynamic "webhook_receiver" {
-    for_each = var.alert_webhook_urls
+    for_each = merge(
+      var.alert_webhook_urls,
+      var.pretty_email_enabled ? { prettymail = azurerm_logic_app_trigger_http_request.pretty_email[0].callback_url } : {},
+    )
     content {
       name                    = "webhook-${webhook_receiver.key}"
       service_uri             = webhook_receiver.value
