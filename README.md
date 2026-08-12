@@ -74,8 +74,16 @@ Deployer needs: **Contributor** + **User Access Administrator** (or Owner) on th
 and a privileged directory role (Global Administrator / Privileged Role Administrator) for
 the Graph app-role grants. A read-only app registration cannot deploy this.
 
+Run the pre-flight check first — it verifies the az session/tenant, required
+resource providers (feature-aware: ACS/Logic only when `pretty_email_enabled`,
+Insights/Log Analytics only when `alerting_enabled`), the resource group, deployer
+RBAC (Owner, or Contributor + User Access Administrator), the directory role for
+the Graph app-role grants (GA/PRA), and terraform. `-Register` auto-registers
+missing providers:
+
 ```bash
 az login --tenant <customer-tenant>
+pwsh scripts/Test-DeploymentPrereqs.ps1 -TfvarsPath terraform/deployments/<customer>-dev.tfvars -Register
 cd terraform
 terraform init
 terraform plan  -var-file=deployments/<customer>-dev.tfvars
