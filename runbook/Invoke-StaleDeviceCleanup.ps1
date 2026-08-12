@@ -108,8 +108,18 @@ if ($HardDeleteAfterDays -lt $SoftDeleteAfterDays) {
 if ($OnDuplicateMatch -notin @('Skip', 'ProcessAll')) {
     throw "OnDuplicateMatch must be 'Skip' or 'ProcessAll' (got '$OnDuplicateMatch')."
 }
+# Portal job-input fields sometimes arrive with literal surrounding quotes
+# (a pasted "value"); a quoted name silently builds an invalid vault URL that
+# only fails at the first live backup. Strip them, then validate the result.
+$KeyVaultName = $KeyVaultName.Trim().Trim('"').Trim("'")
 if ($BackupBLandLAPs -and [string]::IsNullOrWhiteSpace($KeyVaultName)) {
     throw 'BackupBLandLAPs is $true but -KeyVaultName is empty. Provide the vault name or disable the backup.'
+}
+if ($KeyVaultName -and $KeyVaultName -notmatch '^[A-Za-z][A-Za-z0-9-]{1,22}[A-Za-z0-9]$') {
+    throw "KeyVaultName '$KeyVaultName' is not a valid Key Vault name (3-24 chars, alphanumeric/hyphens). Do not wrap the value in quotes."
+}
+if ($SecretRetentionDays -lt 1 -or $SecretRetentionDays -gt 30) {
+    throw "SecretRetentionDays=$SecretRetentionDays is outside the sane range (1-30). Long retention keeps plaintext BitLocker/LAPS material in the vault -- the design intent is a short rollback window (default 4 days)."
 }
 
 $requiredModules = @(
