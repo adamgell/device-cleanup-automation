@@ -110,19 +110,19 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "job_failed" {
 
   name                = "alert-devicecleanup-job-failed-${var.environment}"
   display_name        = "Device Cleanup ${var.environment}: runbook job failed"
-  description         = "A ${var.runbook_name} job ended Failed/Suspended/Stopped. Check the job output in the Automation account."
+  description         = "The device cleanup job did not finish -- it ended Failed, Suspended or Stopped, so nothing after that point ran. The run log is attached."
   location            = var.location
   resource_group_name = data.azurerm_resource_group.target.name
 
-  scopes    = [local.log_analytics_workspace_id]
-  severity  = 1
+  scopes   = [local.log_analytics_workspace_id]
+  severity = 1
 
   evaluation_frequency = "PT15M"
   # Window is 2x frequency on purpose: JobLogs rows land in Log Analytics
   # several minutes after their TimeGenerated, so a window equal to the
   # frequency lets late-arriving rows age out un-alerted. Auto-mitigation
   # absorbs the overlap.
-  window_duration      = "PT30M"
+  window_duration = "PT30M"
 
   criteria {
     query                   = local.failed_job_query
@@ -147,7 +147,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "run_digest" {
 
   name                = "alert-devicecleanup-run-digest-${var.environment}"
   display_name        = "Device Cleanup ${var.environment}: run completed"
-  description         = "${var.runbook_name} finished and reported its RUN SUMMARY counters (shown in the search results below). DryRun runs report would-be actions only."
+  description         = "The device cleanup run finished. The numbers below are what it did -- or, on a dry run, what it would have done. The full device list is attached."
   location            = var.location
   resource_group_name = data.azurerm_resource_group.target.name
 
@@ -179,7 +179,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "delete_threshold" {
 
   name                = "alert-devicecleanup-delete-threshold-${var.environment}"
   display_name        = "Device Cleanup ${var.environment}: would-delete count above ${var.alert_max_delete_count}"
-  description         = "A ${var.runbook_name} run reported ToDelete above ${var.alert_max_delete_count}. Review the candidate list before any live run."
+  description         = "This run wanted to permanently delete more than ${var.alert_max_delete_count} device objects. Every one of them is listed in the attached delete-candidates.csv -- review it before anyone runs this for real."
   location            = var.location
   resource_group_name = data.azurerm_resource_group.target.name
 
@@ -212,7 +212,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "backup_failed" {
 
   name                = "alert-devicecleanup-backup-failed-${var.environment}"
   display_name        = "Device Cleanup ${var.environment}: secret backup failures"
-  description         = "A ${var.runbook_name} run reported BackupFailed > 0 — device secrets were not vaulted. Stop before any live run and investigate Key Vault access."
+  description         = "Device secrets (BitLocker recovery keys and LAPS passwords) could not be saved to Key Vault before deletion. Do not run this live until Key Vault access is fixed -- deleting these devices would lose the keys."
   location            = var.location
   resource_group_name = data.azurerm_resource_group.target.name
 

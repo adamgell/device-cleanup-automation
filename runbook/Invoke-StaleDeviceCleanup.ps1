@@ -1098,10 +1098,24 @@ Write-Output ($results | ConvertTo-Json -Depth 4)
 # so the JSON block above is unusable for downstream consumers. Small
 # per-device lines survive intact; the pretty-email Logic App reassembles
 # them into the devices.csv attachment.
+#
+# Columns carry the facts a reviewer needs to approve or reject a deletion:
+# WasEnabled/IsAutopilot/ZtdId/DowngradeReason are what separate a dead object
+# from live hardware, and a delete list without them cannot be reviewed.
+$csvColumns = @(
+    'DisplayName','DeviceId','OS','TrustType','LastSignInUtc','AgeDays','OwnerUPN',
+    'WasEnabled','IsAutopilot','ZtdId','Stage','DowngradeReason','Action','Status'
+)
 $csvQuote = { param($v) '"' + ([string]$v -replace '"', '""') + '"' }
-Write-Output ('[CSVROW] ' + (@('DisplayName','DeviceId','OS','TrustType','LastSignInUtc','AgeDays','OwnerUPN','Stage','Action','Status') -join ','))
+Write-Output ('[CSVROW] ' + ($csvColumns -join ','))
 foreach ($r in $results) {
-    $fields = foreach ($p in 'DisplayName','DeviceId','OS','TrustType','LastSignInUtc','AgeDays','OwnerUPN','Stage','Action','Status') { & $csvQuote $r.$p }
+    $fields = foreach ($p in $csvColumns) { & $csvQuote $r.$p }
+    Write-Output ('[CSVROW] ' + ($fields -join ','))
+}
+# Autopilot-protected devices are skipped, not acted on, but they belong in the
+# review list -- they are the ones a serial cross-check saved.
+foreach ($r in $autopilotStale) {
+    $fields = foreach ($p in $csvColumns) { & $csvQuote $r.$p }
     Write-Output ('[CSVROW] ' + ($fields -join ','))
 }
 
@@ -1115,6 +1129,15 @@ foreach ($key in $counters.Keys) {
     Write-Log ("  {0,-24} {1}" -f $key, $counters[$key])
 }
 Write-Log ("  {0,-24} {1}" -f 'ApRecordsProtectedBySerial', $script:_apProtectedCount)
+
+# Machine-readable twin of the block above. The alert emails render these
+# numbers directly; scraping the human-formatted lines above with a regex would
+# break the first time a counter name changes width.
+$summary = [ordered]@{ RunId = $runStamp; DryRun = [bool]$DryRun }
+foreach ($key in $counters.Keys) { $summary[$key] = $counters[$key] }
+$summary['ApRecordsProtectedBySerial'] = $script:_apProtectedCount
+Write-Output ('[RUNSUMMARY] ' + ($summary | ConvertTo-Json -Compress))
+
 if ($DryRun) {
     Write-Log 'DryRun was ON -- no changes were made. Re-run with -DryRun:$false (Terraform: enable_apply=true) to act.' -Level WARN
 }

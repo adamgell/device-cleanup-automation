@@ -1,8 +1,8 @@
 # Template — copy to <customer>-<env>.tfvars (gitignored; customer config stays
 # local/private, never committed to this repo).
-subscription_id     = "00000000-0000-0000-0000-000000000000"
-customer            = "contoso"
-environment         = "dev"
+subscription_id = "00000000-0000-0000-0000-000000000000"
+customer        = "contoso"
+environment     = "dev"
 # Must already exist -- the module reads it, it does not create it.
 resource_group_name = "rg-devicecleanup-contoso-dev"
 
