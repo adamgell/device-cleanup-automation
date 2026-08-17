@@ -38,7 +38,12 @@ param(
 
     # --- Safety rails ---------------------------------------------------------
     [Parameter()] [bool]   $DisableOnly                 = $false,
-    [Parameter()] [bool]   $RequireDisabledBeforeDelete = $false,
+    # Default TRUE: a device that is still enabled is disabled first and only hard-deleted on a
+    # later run, once someone has had the chance to notice. Disable is reversible; delete is not.
+    # PH first-run review 2026-08-17: with this $false, a live run would have hard-deleted 142
+    # objects that had never been disabled -- no observation window, no reversible intermediate
+    # step. Set $false only for a cohort that has already completed a disable cycle.
+    [Parameter()] [bool]   $RequireDisabledBeforeDelete = $true,
 
     # --- BitLocker / LAPS backup ----------------------------------------------
     [Parameter()] [bool]   $BackupBLandLAPs            = $true,

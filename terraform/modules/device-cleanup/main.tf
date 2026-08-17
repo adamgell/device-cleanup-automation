@@ -12,12 +12,13 @@ locals {
   # Boolean values are JSON literals so Automation deserializes them as [bool].
   runbook_parameters = merge(
     {
-      dryrun              = var.enable_apply ? "false" : "true"
-      softdeleteafterdays = tostring(var.soft_delete_after_days)
-      harddeleteafterdays = tostring(var.hard_delete_after_days)
-      backupblandlaps     = var.backup_enabled ? "true" : "false"
-      keyvaultname        = var.backup_enabled ? var.key_vault_name : ""
-      secretretentiondays = tostring(var.secret_retention_days)
+      dryrun                      = var.enable_apply ? "false" : "true"
+      softdeleteafterdays         = tostring(var.soft_delete_after_days)
+      harddeleteafterdays         = tostring(var.hard_delete_after_days)
+      backupblandlaps             = var.backup_enabled ? "true" : "false"
+      keyvaultname                = var.backup_enabled ? var.key_vault_name : ""
+      secretretentiondays         = tostring(var.secret_retention_days)
+      requiredisabledbeforedelete = var.require_disabled_before_delete ? "true" : "false"
     },
     var.extra_runbook_parameters
   )
