@@ -187,3 +187,13 @@ variable "pretty_email_recipients" {
   type        = list(string)
   default     = []
 }
+
+variable "require_disabled_before_delete" {
+  description = <<-EOT
+    When true (default), a stale device that is still enabled is DISABLED first and only
+    hard-deleted on a later run. Disable is reversible; delete is not. Set false only for a
+    cohort that has already been through a disable cycle and been reviewed.
+  EOT
+  type        = bool
+  default     = true
+}

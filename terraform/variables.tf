@@ -124,3 +124,9 @@ variable "pretty_email_recipients" {
   type    = list(string)
   default = []
 }
+
+variable "require_disabled_before_delete" {
+  description = "Disable stale devices before any hard delete. Reversible step first; see module variable."
+  type        = bool
+  default     = true
+}

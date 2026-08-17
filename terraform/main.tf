@@ -23,12 +23,13 @@ module "device_cleanup" {
   pretty_email_recipients    = var.pretty_email_recipients
   log_analytics_workspace_id = var.log_analytics_workspace_id
 
-  enable_apply             = var.enable_apply
-  schedule_enabled         = var.schedule_enabled
-  schedule_week_days       = var.schedule_week_days
-  schedule_start_time      = var.schedule_start_time
-  schedule_timezone        = var.schedule_timezone
-  extra_runbook_parameters = var.extra_runbook_parameters
+  enable_apply                   = var.enable_apply
+  require_disabled_before_delete = var.require_disabled_before_delete
+  schedule_enabled               = var.schedule_enabled
+  schedule_week_days             = var.schedule_week_days
+  schedule_start_time            = var.schedule_start_time
+  schedule_timezone              = var.schedule_timezone
+  extra_runbook_parameters       = var.extra_runbook_parameters
 
   tags = var.tags
 }
