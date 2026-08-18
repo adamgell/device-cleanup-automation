@@ -28,3 +28,16 @@ output "action_group_id" {
   description = "Alerting action group id — later phases (Teams/SharePoint/webhook) add receivers here."
   value       = var.alerting_enabled ? azurerm_monitor_action_group.alerts[0].id : null
 }
+
+output "email_sender_address" {
+  description = "From: address the pretty HTML alerts are sent as."
+  value       = var.pretty_email_enabled ? "${var.email_sender_username}@${azurerm_email_communication_service_domain.pretty[0].from_sender_domain}" : null
+}
+
+output "email_domain_verification_records" {
+  description = <<-EOT
+    DNS records the customer must publish to verify a CustomerManaged sender domain
+    (empty for AzureManaged / Exchange-Online-verified domains).
+  EOT
+  value = var.pretty_email_enabled && var.email_domain_management == "CustomerManaged" ? try(azurerm_email_communication_service_domain.pretty[0].verification_records, null) : null
+}

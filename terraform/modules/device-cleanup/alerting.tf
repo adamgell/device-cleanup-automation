@@ -75,6 +75,13 @@ resource "azurerm_monitor_diagnostic_setting" "automation_jobs" {
 resource "azurerm_monitor_action_group" "alerts" {
   count = var.alerting_enabled ? 1 : 0
 
+  lifecycle {
+    precondition {
+      condition     = length(var.alert_email_addresses) > 0 || length(var.alert_webhook_urls) > 0
+      error_message = "alerting_enabled is true but no email recipients or webhooks were supplied — the alert rules would fire into nothing."
+    }
+  }
+
   name                = "ag-devicecleanup-${var.environment}"
   resource_group_name = data.azurerm_resource_group.target.name
   short_name          = "devcleanup"

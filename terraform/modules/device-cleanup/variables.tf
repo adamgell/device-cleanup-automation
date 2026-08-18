@@ -150,6 +150,16 @@ variable "alert_email_addresses" {
     condition     = alltrue([for e in var.alert_email_addresses : can(regex("@", e))])
     error_message = "Each entry must be an email address."
   }
+
+  # Placeholders silently produce a fully-wired alerting stack that mails nowhere.
+  # Fail the apply instead.
+  validation {
+    condition = alltrue([
+      for e in var.alert_email_addresses :
+      !can(regex("(?i)(CHANGE-ME|example\\.(com|org|net))", e))
+    ])
+    error_message = "alert_email_addresses still contains a placeholder. Set real recipients before apply."
+  }
 }
 
 variable "log_analytics_workspace_id" {
@@ -186,6 +196,65 @@ variable "pretty_email_recipients" {
   description = "Recipients of the pretty HTML alert emails. Required non-empty when pretty_email_enabled."
   type        = list(string)
   default     = []
+
+  validation {
+    condition = alltrue([
+      for e in var.pretty_email_recipients :
+      !can(regex("(?i)(CHANGE-ME|example\\.(com|org|net))", e))
+    ])
+    error_message = "pretty_email_recipients still contains a placeholder. Set real recipients before apply."
+  }
+}
+
+# --- ACS sender domain / least-privilege ---------------------------------------
+
+variable "email_domain_management" {
+  description = <<-EOT
+    How the ACS sender domain is provisioned:
+      AzureManaged                    - free <guid>.azurecomm.net sender. No DNS work,
+                                        but the sender has no relationship to the customer
+                                        domain and is routinely spam-filtered.
+      CustomerManaged                 - customer subdomain (email_custom_domain_name) verified
+                                        by TXT/SPF/DKIM records the customer publishes.
+      CustomerManagedInExchangeOnline - reuse a domain already verified in the customer's
+                                        Exchange Online tenant. No new DNS records.
+    Anything other than AzureManaged requires email_custom_domain_name.
+  EOT
+  type        = string
+  default     = "AzureManaged"
+
+  validation {
+    condition     = contains(["AzureManaged", "CustomerManaged", "CustomerManagedInExchangeOnline"], var.email_domain_management)
+    error_message = "email_domain_management must be AzureManaged, CustomerManaged, or CustomerManagedInExchangeOnline."
+  }
+}
+
+variable "email_custom_domain_name" {
+  description = "Sender domain (e.g. 'notify.contoso.org'). Required unless email_domain_management is AzureManaged."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.email_custom_domain_name == null || can(regex("^[a-z0-9.-]+\\.[a-z]{2,}$", var.email_custom_domain_name))
+    error_message = "email_custom_domain_name must be a bare domain name, no scheme or @."
+  }
+}
+
+variable "email_sender_username" {
+  description = "Local part of the sender address. Default DoNotReply."
+  type        = string
+  default     = "DoNotReply"
+}
+
+variable "acs_email_role_definition_name" {
+  description = <<-EOT
+    Role granted to the Logic App identity ON THE ACS RESOURCE ONLY, for the Entra-authenticated
+    email send. "Contributor" is what Microsoft documents and is the only combination verified to
+    work here; it also carries write/delete/ListKeys on that resource. For prod, create a custom
+    role with the minimum actions, validate a live test send, then pass its name here.
+  EOT
+  type        = string
+  default     = "Contributor"
 }
 
 variable "require_disabled_before_delete" {
