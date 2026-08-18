@@ -39,5 +39,5 @@ output "email_domain_verification_records" {
     DNS records the customer must publish to verify a CustomerManaged sender domain
     (empty for AzureManaged / Exchange-Online-verified domains).
   EOT
-  value = var.pretty_email_enabled && var.email_domain_management == "CustomerManaged" ? try(azurerm_email_communication_service_domain.pretty[0].verification_records, null) : null
+  value       = var.pretty_email_enabled && var.email_domain_management == "CustomerManaged" ? try(azurerm_email_communication_service_domain.pretty[0].verification_records, null) : null
 }

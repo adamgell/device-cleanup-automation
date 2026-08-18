@@ -23,6 +23,11 @@ module "device_cleanup" {
   pretty_email_recipients    = var.pretty_email_recipients
   log_analytics_workspace_id = var.log_analytics_workspace_id
 
+  email_domain_management        = var.email_domain_management
+  email_custom_domain_name       = var.email_custom_domain_name
+  email_sender_username          = var.email_sender_username
+  acs_email_role_definition_name = var.acs_email_role_definition_name
+
   enable_apply                   = var.enable_apply
   require_disabled_before_delete = var.require_disabled_before_delete
   schedule_enabled               = var.schedule_enabled
