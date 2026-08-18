@@ -116,9 +116,9 @@ resource "azurerm_email_communication_service" "pretty" {
 resource "azurerm_email_communication_service_domain" "pretty" {
   count = var.pretty_email_enabled ? 1 : 0
 
-  name              = "AzureManagedDomain"
+  name              = var.email_domain_management == "AzureManaged" ? "AzureManagedDomain" : var.email_custom_domain_name
   email_service_id  = azurerm_email_communication_service.pretty[0].id
-  domain_management = "AzureManaged"
+  domain_management = var.email_domain_management
 }
 
 resource "azurerm_communication_service" "pretty" {
@@ -141,6 +141,17 @@ resource "azurerm_communication_service_email_domain_association" "pretty" {
 resource "azurerm_logic_app_workflow" "pretty_email" {
   count = var.pretty_email_enabled ? 1 : 0
 
+  lifecycle {
+    precondition {
+      condition     = length(var.pretty_email_recipients) > 0
+      error_message = "pretty_email_enabled is true but pretty_email_recipients is empty — the composed alert mail would have no To: address."
+    }
+    precondition {
+      condition     = var.email_domain_management == "AzureManaged" || var.email_custom_domain_name != null
+      error_message = "email_domain_management is customer-managed but email_custom_domain_name was not set."
+    }
+  }
+
   name                = "logic-devicecleanup-prettymail-${var.environment}"
   location            = var.location
   resource_group_name = data.azurerm_resource_group.target.name
@@ -156,7 +167,7 @@ resource "azurerm_role_assignment" "pretty_email_acs" {
   count = var.pretty_email_enabled ? 1 : 0
 
   scope                = azurerm_communication_service.pretty[0].id
-  role_definition_name = "Contributor"
+  role_definition_name = var.acs_email_role_definition_name
   principal_id         = azurerm_logic_app_workflow.pretty_email[0].identity[0].principal_id
 }
 
@@ -366,7 +377,7 @@ resource "azurerm_logic_app_action_custom" "pretty_email_send" {
         "Content-Type" = "application/json"
       }
       body = {
-        senderAddress = "DoNotReply@${azurerm_email_communication_service_domain.pretty[0].from_sender_domain}"
+        senderAddress = "${var.email_sender_username}@${azurerm_email_communication_service_domain.pretty[0].from_sender_domain}"
         recipients = {
           to = [for r in var.pretty_email_recipients : { address = r }]
         }

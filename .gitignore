@@ -1,3 +1,6 @@
 .DS_Store
 secret.json
 *.zip
+
+# Evidence pulls contain customer device data -- local only.
+evidence/
