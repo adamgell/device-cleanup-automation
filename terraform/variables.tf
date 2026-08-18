@@ -130,3 +130,29 @@ variable "require_disabled_before_delete" {
   type        = bool
   default     = true
 }
+
+# --- ACS sender domain / least-privilege (pass-through to the module) ----------
+
+variable "email_domain_management" {
+  description = "AzureManaged | CustomerManaged | CustomerManagedInExchangeOnline. See module variables.tf."
+  type        = string
+  default     = "AzureManaged"
+}
+
+variable "email_custom_domain_name" {
+  description = "Sender domain, e.g. 'notify.contoso.org'. Required unless email_domain_management is AzureManaged."
+  type        = string
+  default     = null
+}
+
+variable "email_sender_username" {
+  description = "Local part of the sender address. Default DoNotReply."
+  type        = string
+  default     = "DoNotReply"
+}
+
+variable "acs_email_role_definition_name" {
+  description = "Role granted to the Logic App identity on the ACS resource. Default Contributor."
+  type        = string
+  default     = "Contributor"
+}
