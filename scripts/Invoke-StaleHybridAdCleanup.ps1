@@ -259,14 +259,31 @@ foreach ($computer in $computers) {
         }
 
         $result.Action = 'Delete'
+        # Computer objects are often NOT leaf objects: BitLocker recovery info
+        # (msFVE-RecoveryInformation) and service connection points live under
+        # them, and Remove-ADComputer refuses non-leaf objects ("can perform
+        # the requested operation only on a leaf object" -- hit live at PH,
+        # 77 of 95, 2026-08-19). Children are enumerated and recorded, then
+        # the subtree is removed; the AD Recycle Bin retains parent AND
+        # children, so recovery of the whole object stays possible.
+        $children = @(Get-ADObject -Filter '*' -SearchBase $computer.DistinguishedName -SearchScope OneLevel @adCommon)
+        if ($children.Count -gt 0) {
+            $childSummary = ($children | Group-Object -Property ObjectClass | ForEach-Object { "$($_.Count)x $($_.Name)" }) -join ', '
+            $result.Detail = "Child objects removed with parent: $childSummary"
+        }
         if ($DryRun) {
             $result.Status = 'WouldDelete'; $counters.WouldDelete++
-            Write-Log "DRY-RUN would DELETE '$name' (stamped $stampDate)."
+            Write-Log "DRY-RUN would DELETE '$name' (stamped $stampDate)$(if ($children.Count) { " incl. $childSummary" })."
         }
         elseif ($PSCmdlet.ShouldProcess($name, "Delete AD computer account (disabled since $stampDate)")) {
-            Remove-ADComputer -Identity $computer.DistinguishedName -Confirm:$false @adCommon
+            if ($children.Count -gt 0) {
+                Remove-ADObject -Identity $computer.DistinguishedName -Recursive -Confirm:$false @adCommon
+            }
+            else {
+                Remove-ADComputer -Identity $computer.DistinguishedName -Confirm:$false @adCommon
+            }
             $result.Status = 'Deleted'; $counters.Deleted++
-            Write-Log "DELETED '$name'." -Level ACTION
+            Write-Log "DELETED '$name'$(if ($children.Count) { " (with $childSummary)" })." -Level ACTION
         }
         $results.Add($result)
     }
