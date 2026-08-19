@@ -121,3 +121,25 @@ tfvars file if you apply more than one from this directory.
 - Provider quirk: the Automation API echoes `runbook_type` back as "PowerShell", so azurerm
   plans a runbook replace on already-deployed environments. Harmless (same content re-uploaded,
   schedules relink), but expect `1 to destroy` on the next apply of an existing deployment.
+
+## Hybrid-joined devices: `HybridDeviceHandling`
+
+Field finding (Presbyterian Homes, 2026-08-19): **cloud-side disable does not stick on
+hybrid-joined devices.** Entra Connect re-syncs `accountEnabled` from the on-prem computer
+account, and 93 of 93 hybrid (`ServerAd`) disables reverted within a day. A cloud-side delete of
+a synced object is likewise expected to be recreated while the AD computer account remains in
+sync scope. The durable path for hybrid devices is on-premises: act in AD (see
+`scripts/Invoke-StaleHybridAdCleanup.ps1`), let sync propagate to Entra, and let the Intune
+device cleanup rule age out the Intune record.
+
+The runbook parameter `HybridDeviceHandling` selects the behavior per customer:
+
+| Value | Behavior | When to use |
+|---|---|---|
+| `Process` (default) | Attempt cloud-side disable/delete on hybrid devices anyway | Customers who want the cloud attempt made regardless — for example where AD cleanup is handled by another team on its own cadence, or where sync scope is being reduced and the revert window is acceptable |
+| `ReportOnly` | Classify stale `ServerAd` devices as `OnPremRemediationRequired`, take no cloud action, count them in the run summary, and emit them in the CSV rows as input for the AD-side script | Customers who own their AD and want honest run reports with a work-list for the on-prem pass |
+
+Scheduled runs set it through Terraform: `extra_runbook_parameters = { hybriddevicehandling = "ReportOnly" }`
+(lowercase key, per the extra-parameters convention). Manual portal starts type it like any other
+field. The default is `Process` so existing deployments keep their current behavior until a
+customer explicitly opts in.

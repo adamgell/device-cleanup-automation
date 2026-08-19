@@ -78,7 +78,22 @@ param(
     # Use -OperatingSystemFilter Windows for a Windows-only run.
     [Parameter()]
     [ValidateSet('Windows', 'Android', 'AndroidForWork', 'AndroidAOSP', 'iOS', 'IPhone', 'IPad', 'macOS', 'Linux', 'Unknown', 'Other')]
-    [string] $OperatingSystemFilter = ''
+    [string] $OperatingSystemFilter = '',
+
+    # --- Hybrid-joined (on-prem synced) device handling -------------------------
+    # PH field finding 2026-08-19: Entra Connect re-syncs accountEnabled from the
+    # on-prem computer account, so a cloud-side disable of a hybrid (ServerAd)
+    # device reverts on the next sync cycle -- 93 of 93 disables reverted within
+    # a day. A cloud-side delete of a synced object is likewise expected to be
+    # recreated while the AD account remains in sync scope.
+    #   Process    = attempt cloud-side disable/delete anyway (legacy behavior;
+    #                some customers want the cloud attempt made regardless).
+    #   ReportOnly = classify stale ServerAd devices as OnPremRemediationRequired,
+    #                take no cloud action, and emit them in the CSV rows for the
+    #                AD-side companion (scripts/Invoke-StaleHybridAdCleanup.ps1).
+    [Parameter()]
+    [ValidateSet('Process', 'ReportOnly')]
+    [string] $HybridDeviceHandling = 'Process'
 )
 
 $OperatingSystemFilterValues = @(
@@ -199,6 +214,10 @@ if ($DisableOnly) {
 }
 if (-not $BackupBLandLAPs -and -not $DryRun -and -not $DisableOnly) {
     Write-Log 'BackupBLandLAPs = $false in a live run with hard deletes enabled: BitLocker + LAPS will NOT be captured before deletion. If you do not have a separate backup mechanism, abort and reconfigure.' -Level WARN
+}
+
+if ($HybridDeviceHandling -eq 'ReportOnly') {
+    Write-Log 'HybridDeviceHandling=ReportOnly -- stale hybrid-joined (ServerAd) devices will be classified OnPremRemediationRequired and left untouched; route them to the AD-side cleanup.'
 }
 
 $filter = "approximateLastSignInDateTime le $softCutoffIso"
@@ -840,6 +859,7 @@ $results        = New-Object System.Collections.Generic.List[object]
 $autopilotStale = New-Object System.Collections.Generic.List[object]
 $counters = [ordered]@{
     Total                   = 0
+    HybridOnPremRequired    = 0
     AutopilotProtected      = 0
     AutopilotDeleted        = 0
     AutopilotDeleteSkipped  = 0
@@ -942,6 +962,16 @@ foreach ($device in $staleDevices) {
     if ($downgradeReason) {
         Write-Log ("Downgrading '{0}' [{1}] from HardDelete to SoftDelete -- {2} (age {3} days)." -f `
             $device.DisplayName, $device.Id, $downgradeReason, $ageDays)
+    }
+
+    if ($HybridDeviceHandling -eq 'ReportOnly' -and $device.TrustType -eq 'ServerAd' -and $targetStage -ne 'None') {
+        $row.Action = 'None (hybrid -- on-prem remediation required)'
+        $row.Status = 'OnPremRemediationRequired'
+        $counters.HybridOnPremRequired++
+        Write-Log ("HYBRID (ServerAd) '{0}' [{1}] age {2} days -- cloud-side action suppressed (HybridDeviceHandling=ReportOnly); handle in AD and let sync propagate." -f `
+            $device.DisplayName, $device.Id, $ageDays)
+        $results.Add($row)
+        continue
     }
 
     if ($isAutopilot) {
