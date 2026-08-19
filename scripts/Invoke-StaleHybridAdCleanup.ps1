@@ -116,6 +116,11 @@ $runStamp    = (Get-Date).ToString('yyyyMMdd-HHmmss')
 $today       = Get-Date
 $staleCutoff = $today.AddDays(-1 * $StaleThresholdDays)
 if (-not $OutputPath) { $OutputPath = Join-Path -Path (Get-Location) -ChildPath "AdCleanup-$runStamp.csv" }
+elseif (Test-Path -Path $OutputPath -PathType Container) {
+    # A directory was passed; Export-Csv needs a file path and fails with a
+    # misleading "access denied" otherwise.
+    $OutputPath = Join-Path -Path $OutputPath -ChildPath "AdCleanup-$runStamp.csv"
+}
 
 function Write-Log {
     param(
