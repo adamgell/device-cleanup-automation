@@ -31,6 +31,7 @@ module "device_cleanup" {
   enable_apply                   = var.enable_apply
   require_disabled_before_delete = var.require_disabled_before_delete
   schedule_enabled               = var.schedule_enabled
+  schedule_frequency             = var.schedule_frequency
   schedule_week_days             = var.schedule_week_days
   schedule_start_time            = var.schedule_start_time
   schedule_timezone              = var.schedule_timezone

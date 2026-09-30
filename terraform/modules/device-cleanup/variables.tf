@@ -98,6 +98,16 @@ variable "schedule_enabled" {
   default     = false
 }
 
+variable "schedule_frequency" {
+  description = "Recurring schedule frequency: Day or Week. Weekly remains the compatibility default."
+  type        = string
+  default     = "Week"
+  validation {
+    condition     = contains(["Day", "Week"], var.schedule_frequency)
+    error_message = "schedule_frequency must be Day or Week."
+  }
+}
+
 variable "schedule_week_days" {
   description = "Days of week for the schedule."
   type        = list(string)
@@ -105,7 +115,7 @@ variable "schedule_week_days" {
 }
 
 variable "schedule_start_time" {
-  description = "ISO-8601 first occurrence (must be > 5 min in the future at apply time). Sets the time-of-day for the weekly run."
+  description = "ISO-8601 first occurrence (must be > 5 min in the future at apply time). Sets the time-of-day for the recurring run."
   type        = string
   default     = null
 }

@@ -60,6 +60,16 @@ variable "schedule_enabled" {
   default = false
 }
 
+variable "schedule_frequency" {
+  description = "Recurring schedule frequency: Day or Week. Weekly remains the compatibility default."
+  type        = string
+  default     = "Week"
+  validation {
+    condition     = contains(["Day", "Week"], var.schedule_frequency)
+    error_message = "schedule_frequency must be Day or Week."
+  }
+}
+
 variable "schedule_week_days" {
   type    = list(string)
   default = ["Sunday"]

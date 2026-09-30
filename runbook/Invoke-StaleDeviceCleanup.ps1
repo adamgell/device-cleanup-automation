@@ -11,7 +11,7 @@
       - Connect-MgGraph -Identity (managed identity) replaces interactive auth.
       - Transcript/CSV file outputs are replaced by job output streams.
       - BitLocker/LAPS backup writes to Azure Key Vault (one secret per device)
-        instead of a local CSV, with automatic retention cleanup. Secret
+        instead of a local CSV, with opt-in retention cleanup. Secret
         material is NEVER written to the job output stream.
       - -DeviceListCsv is replaced by -DeviceListBlobUrl (same columns and
         semantics, read from blob storage with the managed identity).
@@ -31,6 +31,11 @@
 param(
     # --- Run mode -------------------------------------------------------------
     [Parameter()] [bool]   $DryRun = $true,
+    [Parameter()] [string] $ApprovedDeviceObjectIds = '',
+    [Parameter()] [int] $MaxLiveActions = 5,
+    [Parameter()] [bool] $PurgeOnly = $false,
+    [Parameter()] [bool] $RunVaultRetentionCleanup = $false,
+    [Parameter()] [string] $ExcludedDeviceNamePattern = '',
 
     # --- Lifecycle thresholds (days) ------------------------------------------
     [Parameter()] [int]    $SoftDeleteAfterDays = 90,
@@ -62,9 +67,8 @@ param(
     # object can share hardware with a LIVE enrollment under a different Entra
     # object. Matching AP records by the stale object's deviceId would then
     # delete the Autopilot registration of an in-service machine. When enabled,
-    # AP records whose serial matches a managed device that synced within
-    # ActiveHardwareWindowDays are protected: the AP record is kept while the
-    # stale Entra object still proceeds through its normal deletion path.
+    # Recent or unknown same-serial enrollment holds the entire candidate.
+    # ActiveHardwareWindowDays also controls the legacy AP serial guard.
     [Parameter()] [bool]   $ProtectAutopilotForActiveHardware = $true,
     [Parameter()] [int]    $ActiveHardwareWindowDays          = 30,
 
@@ -108,13 +112,21 @@ $ErrorActionPreference = 'Stop'
 # Logging -- single output stream with level prefixes so ordering survives in
 # the Automation job output. (Replaces Start-Transcript in the original.)
 # ============================================================================
+$script:CleanupLog = [System.Collections.Generic.List[string]]::new()
 function Write-Log {
     param(
         [Parameter(Mandatory)] [string] $Message,
         [ValidateSet('INFO', 'WARN', 'ERROR', 'ACTION')]
         [string] $Level = 'INFO'
     )
-    Write-Output ("[{0}] [{1}] {2}" -f (Get-Date -Format 'u'), $Level, $Message)
+    $line = "[{0}] [{1}] {2}" -f ([datetime]::UtcNow.ToString('u')), $Level, $Message
+    $script:CleanupLog.Add($line)
+    Write-Information $line -InformationAction Continue
+}
+
+function Flush-CleanupLog {
+    foreach ($line in $script:CleanupLog) { Write-Output $line }
+    $script:CleanupLog.Clear()
 }
 
 $runStamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
@@ -141,6 +153,16 @@ if ($KeyVaultName -and $KeyVaultName -notmatch '^[A-Za-z][A-Za-z0-9-]{1,22}[A-Za
 if ($SecretRetentionDays -lt 1 -or $SecretRetentionDays -gt 30) {
     throw "SecretRetentionDays=$SecretRetentionDays is outside the sane range (1-30). Long retention keeps plaintext BitLocker/LAPS material in the vault -- the design intent is a short rollback window (default 4 days)."
 }
+
+$approvedIds = @($ApprovedDeviceObjectIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+foreach ($id in $approvedIds) { $parsed=[guid]::Empty; if (-not [guid]::TryParse($id,[ref]$parsed)) { throw 'Invalid approved object ID' } }
+if ($MaxLiveActions -lt 1 -or $MaxLiveActions -gt 100) { throw 'MaxLiveActions must be 1..100' }
+if (-not $DryRun) {
+    if ($OperatingSystemFilter -ne 'Windows' -or -not $approvedIds.Count) { throw 'Live cleanup requires Windows-only scope and explicit ApprovedDeviceObjectIds' }
+    if (-not $BackupBLandLAPs -or -not $ProtectAutopilotForActiveHardware -or $ProceedOnAutopilotLookupFailure) { throw 'Live cleanup requires backup and active-hardware protection without lookup bypass' }
+}
+
+if ($ExcludedDeviceNamePattern) { [void][regex]::new($ExcludedDeviceNamePattern) }
 
 $requiredModules = @(
     'Microsoft.Graph.Authentication',
@@ -299,7 +321,7 @@ function Get-DeviceBitlockerKeys {
             RecoveryKey = $recoveryKey
         }
     }
-    return ,$out
+    return $out
 }
 
 function Get-DeviceLapsCredentials {
@@ -314,12 +336,12 @@ function Get-DeviceLapsCredentials {
     catch {
         $msg = "$_"
         if ($msg -match '(?i)\b(404|NotFound|ResourceNotFound|Request_ResourceNotFound)\b') {
-            return ,$out
+            return $out
         }
         throw
     }
 
-    if (-not $laps -or -not $laps.credentials) { return ,$out }
+    if (-not $laps -or -not $laps.credentials) { return $out }
 
     foreach ($cred in $laps.credentials) {
         $plain = $null
@@ -337,7 +359,7 @@ function Get-DeviceLapsCredentials {
             Password      = $plain
         }
     }
-    return ,$out
+    return $out
 }
 
 # --- Key Vault secret store (replaces the plaintext secrets CSV).
@@ -379,7 +401,10 @@ function Set-DeviceSecretInVault {
     } | ConvertTo-Json -Depth 8
 
     $uri = "https://$KeyVaultName.vault.azure.net/secrets/$secretName`?api-version=7.4"
-    Invoke-RestMethod -Method PUT -Uri $uri -Headers (Get-KeyVaultAuthHeader) -Body $body -ContentType 'application/json' -ErrorAction Stop | Out-Null
+    $stored = Invoke-RestMethod -Method PUT -Uri $uri -Headers (Get-KeyVaultAuthHeader) -Body $body -ContentType 'application/json' -ErrorAction Stop
+    if (-not $stored.id) { throw 'Key Vault returned no versioned secret ID' }
+    $verified = Invoke-RestMethod -Method GET -Uri "$($stored.id)?api-version=7.4" -Headers (Get-KeyVaultAuthHeader) -ErrorAction Stop
+    if ($verified.value -cne ($payload | ConvertTo-Json -Depth 6)) { throw 'Key Vault backup read-back mismatch' }
     Write-Log "Key Vault: stored secret '$secretName' (retainUntil $retainUntil) for '$($Device.DisplayName)'."
     return $true
 }
@@ -490,9 +515,17 @@ function Backup-DeviceSecrets {
         Write-Log "LAPS backup FAILED for '$($Device.DisplayName)' [$($Device.Id)]: $_" -Level ERROR
     }
 
+    if (@($keys | Where-Object { [string]::IsNullOrWhiteSpace($_.RecoveryKey) }).Count -or @($creds | Where-Object { [string]::IsNullOrWhiteSpace($_.Password) -or $_.Password -eq '<base64 decode failed>' }).Count) {
+        Write-Log 'Recovery material is missing or undecodable; backup rejected.' -Level ERROR
+        $allOk = $false
+    }
     if ($allOk -and (($keys.Count -gt 0) -or ($creds.Count -gt 0))) {
         try {
-            Set-DeviceSecretInVault -Device $Device -BitlockerKeys $keys -LapsCredentials $creds | Out-Null
+            if ($DryRun) {
+                Write-Log 'DRY-RUN recovery material retrieved; no Key Vault write performed.'
+            } else {
+                if ((Set-DeviceSecretInVault -Device $Device -BitlockerKeys $keys -LapsCredentials $creds) -ne $true) { throw 'Backup write verification failed' }
+            }
         }
         catch {
             $allOk = $false
@@ -500,7 +533,8 @@ function Backup-DeviceSecrets {
         }
     }
     elseif ($allOk) {
-        Write-Log "No BitLocker keys or LAPS credentials found for '$($Device.DisplayName)' -- nothing to store."
+        Write-Log "No recovery material found for '$($Device.DisplayName)' -- deletion held." -Level WARN
+        $allOk = $false
     }
 
     return $allOk
@@ -530,15 +564,8 @@ function Remove-IntuneManagedDevice {
         [Parameter(Mandatory)] [bool]   $DryRun
     )
 
-    $listUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$filter=azureADDeviceId eq '$EntraDeviceId'&`$select=id,deviceName,operatingSystem"
-    try {
-        $resp    = Invoke-MgGraphRequest -Method GET -Uri $listUri -OutputType PSObject -ErrorAction Stop
-        $managed = @($resp.value)
-    }
-    catch {
-        Write-Log "Intune lookup failed for '$DisplayName' (deviceId $EntraDeviceId): $_" -Level WARN
-        return $false
-    }
+    $managed = @(Get-CleanupManagedDevices | Where-Object { $_.azureADDeviceId -eq $EntraDeviceId })
+    if (@($managed | Where-Object { $_.operatingSystem -notmatch '^(?i)Windows' }).Count) { return $false }
 
     if ($managed.Count -eq 0) {
         Write-Log "Intune: no managedDevice record matched '$DisplayName' (deviceId $EntraDeviceId) -- nothing to delete."
@@ -571,7 +598,7 @@ $script:_apProtectedCount   = 0
 function Get-ActiveHardwareSerials {
     # Serials of managed devices that synced with Intune within the window.
     # Cached for the run. Used by the serial-aware Autopilot guard.
-    if ($null -ne $script:_activeSerialCache) { return $script:_activeSerialCache }
+    if ($null -ne $script:_activeSerialCache) { return ,$script:_activeSerialCache }
 
     $serials = New-Object System.Collections.Generic.HashSet[string]
     $cutoff  = (Get-Date).ToUniversalTime().AddDays(-1 * $ActiveHardwareWindowDays)
@@ -591,10 +618,10 @@ function Get-ActiveHardwareSerials {
         Write-Log "Active-hardware serial cache: $($serials.Count) managed devices synced within $ActiveHardwareWindowDays days."
     }
     catch {
-        Write-Log "Active-hardware serial lookup FAILED: $_ -- AP guard will treat all serials as unknown (protect none by serial)." -Level WARN
+        throw "Active-hardware lookup incomplete; cleanup stopped."
     }
     $script:_activeSerialCache = $serials
-    return $serials
+    return ,$serials
 }
 
 function Remove-AutopilotDevice {
@@ -712,6 +739,42 @@ function Remove-AutopilotDevice {
     }
     return $allOk
 }
+
+function Get-CleanupManagedDevices {
+    if ($null -ne $script:CleanupManagedDevices) { return $script:CleanupManagedDevices }
+    $items = [System.Collections.Generic.List[object]]::new()
+    $next = 'https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$select=id,deviceName,azureADDeviceId,operatingSystem,lastSyncDateTime,serialNumber&$top=999'
+    while ($next) {
+        $page = Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
+        foreach ($item in @($page.value)) { $items.Add($item) }
+        $next = if ($page.PSObject.Properties['@odata.nextLink']) { $page.'@odata.nextLink' } else { $null }
+    }
+    $script:CleanupManagedDevices=$items.ToArray()
+    return $script:CleanupManagedDevices
+}
+
+function Get-DeviceSafetyHold {
+    param($Device)
+    if ($ExcludedDeviceNamePattern -and $Device.DisplayName -match $ExcludedDeviceNamePattern) { return 'Configured asset hold' }
+    if ($Device.OperatingSystem -notmatch '^(?i)Windows') { return 'Non-Windows scope' }
+    $managed=@(Get-CleanupManagedDevices | Where-Object { $_.azureADDeviceId -eq $Device.DeviceId })
+    $cutoff=[datetime]::UtcNow.AddDays(-$HardDeleteAfterDays)
+    foreach ($m in $managed) {
+        if ($m.operatingSystem -notmatch '^(?i)Windows') { return 'Linked non-Windows enrollment' }
+        if (-not $m.lastSyncDateTime -or [datetime]$m.lastSyncDateTime -ge $cutoff) { return 'Recent or unknown Intune check-in' }
+    }
+    $linkedAp=@($script:_apEnumerationCache | Where-Object { $_.azureActiveDirectoryDeviceId -eq $Device.DeviceId })
+    if (@($linkedAp | Where-Object { [string]::IsNullOrWhiteSpace($_.serialNumber) }).Count) { return 'Autopilot hardware serial unavailable' }
+    $serials=@($managed | ForEach-Object { "$($_.serialNumber)".Trim().ToUpperInvariant() } | Where-Object { $_ })
+    $serials+=@($script:_apEnumerationCache | Where-Object { $_.azureActiveDirectoryDeviceId -eq $Device.DeviceId } | ForEach-Object { "$($_.serialNumber)".Trim().ToUpperInvariant() } | Where-Object { $_ })
+    foreach ($m in @(Get-CleanupManagedDevices)) {
+        if ($serials -contains "$($m.serialNumber)".Trim().ToUpperInvariant()) {
+            if (-not $m.lastSyncDateTime -or [datetime]$m.lastSyncDateTime -ge $cutoff) { return 'Recent or unknown same-serial Intune enrollment' }
+        }
+    }
+    return ''
+}
+$script:CleanupManagedDevices=$null
 
 # --- Blob-based device-list override (replaces local -DeviceListCsv).
 
@@ -845,6 +908,21 @@ if ($OperatingSystemFilterValues.Count -gt 0) {
     Write-Log ("Operating-system filter reduced candidates from {0} to {1}." -f $beforeOsFilter, @($staleDevices).Count) -Level WARN
 }
 
+if ($approvedIds.Count) { $staleDevices=@($staleDevices | Where-Object { $_.Id -in $approvedIds }) }
+$script:LiveActions=0
+[void](Get-CleanupManagedDevices)
+if ($DeleteAutopilotObjects) {
+    $items=[System.Collections.Generic.List[object]]::new()
+    $next='https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities'
+    while ($next) {
+        $page=Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
+        foreach ($item in @($page.value)) { $items.Add($item) }
+        $next=if ($page.PSObject.Properties['@odata.nextLink']) { $page.'@odata.nextLink' } else { $null }
+    }
+    $script:_apEnumerationCache=$items.ToArray()
+}
+[void](Get-ActiveHardwareSerials)
+
 $csvDeviceIdSet = $null
 if ($DeviceListBlobUrl) {
     $csvDeviceIdSet = New-Object System.Collections.Generic.HashSet[string]
@@ -974,36 +1052,17 @@ foreach ($device in $staleDevices) {
         continue
     }
 
-    if ($isAutopilot) {
-        $apFallThrough = $false
-        if ($DeleteAutopilotObjects -and $targetStage -eq 'HardDelete') {
-            Write-Log ("DeleteAutopilotObjects ON -- removing Autopilot record for '{0}' [{1}] (ZTDId {2}) before Entra hard delete..." -f `
-                $device.DisplayName, $device.Id, $ztdId)
-            $apDeleteOk = Remove-AutopilotDevice -EntraDeviceId $device.DeviceId -DisplayName $device.DisplayName -DryRun $DryRun
-            if ($apDeleteOk) {
-                $counters.AutopilotDeleted++
-                $apFallThrough = $true
-            }
-            elseif ($ProceedOnAutopilotLookupFailure) {
-                $counters.AutopilotLookupBypassed++
-                Write-Log "ProceedOnAutopilotLookupFailure ON -- AP lookup unreachable, proceeding with Entra delete for '$($device.DisplayName)' [$($device.Id)] anyway. Manually verify the AP record is gone in Intune." -Level ERROR
-                $apFallThrough = $true
-            }
-            else {
-                $counters.AutopilotDeleteSkipped++
-                Write-Log "Autopilot record delete FAILED for '$($device.DisplayName)' [$($device.Id)] -- reverting to protect-and-skip so Entra object is NOT deleted." -Level ERROR
-            }
-        }
-
-        if (-not $apFallThrough) {
-            $counters.AutopilotProtected++
-            $row.Action = 'None (Autopilot-protected)'
-            $row.Status = 'SkippedAutopilot'
-            $autopilotStale.Add($row) | Out-Null
-            Write-Log ("PROTECTED Autopilot device '{0}' [{1}] (ZTDId {2}) -- would have been {3}, age {4} days." -f `
-                $device.DisplayName, $device.Id, $ztdId, $targetStage, $ageDays) -Level WARN
-            continue
-        }
+    $hold=Get-DeviceSafetyHold -Device $device
+    if ($hold -or ($PurgeOnly -and $targetStage -ne 'HardDelete')) {
+        $row.Status='SafetyHold';$row.Error=if($hold){$hold}else{'Purge-only run excludes disable candidates'}
+        $results.Add($row) | Out-Null
+        continue
+    }
+    if ($isAutopilot -and ($targetStage -ne 'HardDelete' -or -not $DeleteAutopilotObjects)) {
+        $row.Status='SkippedAutopilot';$autopilotStale.Add($row) | Out-Null;$counters.AutopilotProtected++;continue
+    }
+    if (-not $DryRun -and $script:LiveActions -ge $MaxLiveActions) {
+        $row.Status='BatchLimit';$results.Add($row) | Out-Null;continue
     }
 
     try {
@@ -1028,27 +1087,33 @@ foreach ($device in $staleDevices) {
                     $backupOk = $true
                 }
 
-                if (-not $backupOk) {
-                    $counters.BackupFailed++
-                    if (-not $DryRun) {
-                        $row.Status = 'SkippedBackupFailed'
-                        $row.Error  = 'Secret backup failed -- device NOT deleted. Will retry next run.'
-                        $counters.DeleteSkipped++
-                        Write-Log "ABORTING delete of '$($device.DisplayName)' [$($device.Id)] -- secret backup failed." -Level ERROR
-                        break
-                    }
-                    Write-Log "Dry-run: secret backup for '$($device.DisplayName)' [$($device.Id)] failed. In a real run the delete would be aborted." -Level WARN
+                if ($backupOk -isnot [bool] -or -not $backupOk) {
+                    $counters.BackupFailed++;$counters.DeleteSkipped++
+                    $row.Status='SkippedBackupFailed';$row.Error='Recovery backup unavailable or not verified; no device action performed.'
+                    break
                 }
+                if (-not $DryRun) { $script:LiveActions++ }
 
                 if ($DeleteIntuneObjects) {
                     $intuneOk = Remove-IntuneManagedDevice -EntraDeviceId $device.DeviceId -DisplayName $device.DisplayName -DryRun $DryRun
-                    if ($intuneOk) {
+                    if ($intuneOk -is [bool] -and $intuneOk) {
                         $counters.IntuneDeleted++
                     }
                     else {
                         $counters.IntuneDeleteSkipped++
-                        Write-Log "Intune managedDevice cleanup FAILED for '$($device.DisplayName)' [$($device.Id)] -- Entra delete will still proceed." -Level WARN
+                        $row.Status='SkippedIntuneFailed';$row.Error='Intune deletion failed; Autopilot/Entra deletion stopped.'
+                        $counters.DeleteSkipped++
+                        break
                     }
+                }
+
+                if ($DeleteAutopilotObjects) {
+                    $apDeleteOk=Remove-AutopilotDevice -EntraDeviceId $device.DeviceId -DisplayName $device.DisplayName -DryRun $DryRun
+                    if ($apDeleteOk -isnot [bool] -or -not $apDeleteOk) {
+                        $row.Status='SkippedAutopilotFailed';$row.Error='Autopilot deletion failed; Entra deletion stopped.'
+                        $counters.AutopilotDeleteSkipped++;$counters.DeleteSkipped++;break
+                    }
+                    $counters.AutopilotDeleted++
                 }
 
                 if (-not $DryRun) {
@@ -1081,6 +1146,7 @@ foreach ($device in $staleDevices) {
                     break
                 }
 
+                if (-not $DryRun) { $script:LiveActions++ }
                 $counters.ToDisable++
                 $row.Action = 'Update-MgDevice (accountEnabled=false)'
                 if (-not $DryRun) {
@@ -1109,19 +1175,21 @@ foreach ($device in $staleDevices) {
     }
 
     $results.Add($row) | Out-Null
+    if (-not $DryRun -and $row.Status -in @('Error','SkippedIntuneFailed','SkippedAutopilotFailed')) { Write-Log 'Live batch stopped after action failure.' -Level ERROR; break }
 }
 
 #endregion
 
 #region Key Vault retention cleanup + summary (rebuilt tail)
 
-if ($BackupBLandLAPs -and $KeyVaultName) {
+if ($RunVaultRetentionCleanup -and $BackupBLandLAPs -and $KeyVaultName) {
     Write-Log "Running Key Vault retention cleanup (SecretRetentionDays=$SecretRetentionDays)..."
     Invoke-VaultRetentionCleanup -IsDryRun $DryRun
 }
 
 # Per-device results as JSON blocks in the output stream (no secret material).
 Write-Log '===== PER-DEVICE RESULTS (JSON) ====='
+Flush-CleanupLog
 Write-Output ($results | ConvertTo-Json -Depth 4)
 
 # One [CSVROW] line per device: Log Analytics truncates large stream entries,
@@ -1151,6 +1219,7 @@ foreach ($r in $autopilotStale) {
 
 if ($autopilotStale.Count -gt 0) {
     Write-Log '===== AUTOPILOT-PROTECTED DEVICES (JSON) -- NOT modified ====='
+    Flush-CleanupLog
     Write-Output ($autopilotStale | ConvertTo-Json -Depth 4)
 }
 
@@ -1174,5 +1243,6 @@ if ($DryRun) {
 
 Disconnect-MgGraph | Out-Null
 Write-Log "Run $runStamp complete."
+Flush-CleanupLog
 
 #endregion

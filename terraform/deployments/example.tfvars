@@ -19,3 +19,11 @@ enable_apply     = false
 # Job alerting (docs/2026-08-11-alerting-request.md), default off.
 # alerting_enabled      = true
 # alert_email_addresses = ["ops@contoso.com"]
+
+# Daily Windows preview (set schedule_enabled=true and a future start_time to deploy).
+schedule_frequency = "Day"
+extra_runbook_parameters = {
+  operatingsystemfilter    = "Windows"
+  purgeonly                = "true"
+  runvaultretentioncleanup = "false"
+}

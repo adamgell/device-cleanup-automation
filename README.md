@@ -15,7 +15,7 @@ SharePoint / webhook phases add receivers to the same action group.
 
 ```mermaid
 flowchart TD
-    A[Weekly schedule or manual job\nAzure Automation runbook] --> B[Auth: system-assigned managed identity\nno stored credentials, 6 Graph app roles]
+    A[Daily/weekly schedule or manual job\nAzure Automation runbook] --> B[Auth: system-assigned managed identity\nno stored credentials, 6 Graph app roles]
     B --> C[Query Entra devices\nlast sign-in age per device]
     C --> D{Age?}
     D -->|"< 90 days"| E[Untouched]
@@ -23,9 +23,9 @@ flowchart TD
     D -->|"120+ days"| G[Stage: Hard delete]
     G --> H[Safety checks:\nAutopilot serial cross-check,\nOS filter, curated-list mode]
     H --> I[Backup first:\nBitLocker keys + LAPS creds\n→ Key Vault, JSON per device]
-    I --> J[Delete Entra object +\nIntune record + Autopilot registration]
+    I --> J[Delete Intune, then Autopilot,\nthen Entra object]
     J --> K[Job output = audit evidence\nsecrets never in logs]
-    K --> L[Key Vault retention:\nsecrets auto-purged after N days\n= rollback window]
+    K --> L[Key Vault retention:\nopt-in cleanup after N days\nno automatic device restore]
 ```    
 ## Layout
 
@@ -38,8 +38,8 @@ flowchart TD
   - `Div-CleanupEntra-Intune-AP-Devices.ps1` — delegated variant the runbook was
     ported from. Truncated at line 1090 in the original source itself (verified
     against the author's own copy); the Unified script contains the full tail.
-- `runbook/Invoke-StaleDeviceCleanup.ps1` — the Automation port. Every original configuration
-  option survives as a runbook parameter with the same default. Environment-forced changes only:
+- `runbook/Invoke-StaleDeviceCleanup.ps1` — the Automation port. Original configuration
+  options remain runbook parameters, with additional live safety requirements described below:
   managed-identity auth, job-stream output, Key Vault secret backup with retention cleanup,
   and `-DeviceListBlobUrl` (blob CSV, same columns/semantics) replacing the local `-DeviceListCsv`.
 - `terraform/modules/device-cleanup/` — the reusable module.
@@ -54,11 +54,11 @@ flowchart TD
   delegated scopes).
 - Key Vault (RBAC, purge protection off) + `Key Vault Secrets Officer` for the identity —
   the runbook stores one JSON secret per hard-deleted device (BitLocker keys + LAPS creds),
-  then deletes + purges anything past `secret_retention_days` (e.g. 4 days for a
-  customer wanting a short rollback window and no long-term secret storage). Skippable
-  entirely with `backup_enabled = false`.
-- Optional weekly schedule. `enable_apply = false` (the default) keeps every scheduled run
-  in DryRun — flip it in tfvars only after sign-off.
+  `RunVaultRetentionCleanup=true` opts into deleting/purging expired backups.
+  Retention tags alone do not expire secrets. Live mode requires backup_enabled=true.
+- Optional daily or weekly schedule (`schedule_frequency = "Day"` or `"Week"`). `enable_apply = false` (the default) keeps every scheduled run
+  in DryRun. Live mode also requires a Windows filter, explicit object IDs and safety parameters.
+  Prefer manual bounded live batches while the recurring schedule stays in DryRun.
 - Optional job alerting (`alerting_enabled = true`, default off): automation job diagnostics
   → Log Analytics (module-created, or bring your own via `log_analytics_workspace_id`) →
   scheduled query alert on Failed/Suspended/Stopped jobs (15-min cadence, auto-mitigating)
@@ -100,7 +100,7 @@ tfvars file if you apply more than one from this directory.
 2. Diff the DRY-RUN would-DELETE/DISABLE list against the customer's existing
    stale/non-compliant device inventory.
 3. Prod apply → let the scheduled DryRun produce output for customer sign-off.
-4. Flip `enable_apply = true` in the prod tfvars, re-apply.
+4. Run a bounded manual live job against the approved exact object-ID cohort; keep recurring jobs in DryRun. See [purge safety](docs/purge-safety.md).
 
 ## Notes for reuse
 
@@ -143,3 +143,7 @@ Scheduled runs set it through Terraform: `extra_runbook_parameters = { hybriddev
 (lowercase key, per the extra-parameters convention). Manual portal starts type it like any other
 field. The default is `Process` so existing deployments keep their current behavior until a
 customer explicitly opts in.
+
+## Purge safety and daily previews
+
+See [purge safety](docs/purge-safety.md) for required live parameters, activity holds, configurable asset exclusions, backup read-back and failure handling. Run offline validation with `pwsh -NoProfile -File tests/Test-PurgeSafety.ps1`. Existing hybrid `ReportOnly`, CSVROW/RUNSUMMARY output and disable-before-delete defaults are preserved.
