@@ -54,9 +54,8 @@ param(
     [Parameter()] [bool]   $DisableOnly                 = $false,
     # Default TRUE: a device that is still enabled is disabled first and only hard-deleted on a
     # later run, once someone has had the chance to notice. Disable is reversible; delete is not.
-    # customer first-run review 2026-08-17: with this $false, a live run would have hard-deleted 142
-    # objects that had never been disabled -- no observation window, no reversible intermediate
-    # step. Set $false only for a cohort that has already completed a disable cycle.
+    # Disabling first provides an observation window before irreversible deletion.
+    # Set $false only for a cohort that has already completed a disable cycle.
     [Parameter()] [bool]   $RequireDisabledBeforeDelete = $true,
 
     # --- BitLocker / LAPS backup ----------------------------------------------
@@ -94,11 +93,9 @@ param(
     [string] $OperatingSystemFilter = '',
 
     # --- Hybrid-joined (on-prem synced) device handling -------------------------
-    # customer field finding 2026-08-19: Entra Connect re-syncs accountEnabled from the
-    # on-prem computer account, so a cloud-side disable of a hybrid (ServerAd)
-    # device reverts on the next sync cycle -- 93 of 93 disables reverted within
-    # a day. A cloud-side delete of a synced object is likewise expected to be
-    # recreated while the AD account remains in sync scope.
+    # Entra Connect re-syncs accountEnabled from the on-prem computer account,
+    # so cloud-side disable can revert on the next sync cycle. A deleted synced
+    # object can also be recreated while its AD account remains in sync scope.
     #   Process    = attempt cloud-side disable/delete anyway (legacy behavior;
     #                some customers want the cloud attempt made regardless).
     #   ReportOnly = classify stale ServerAd devices as OnPremRemediationRequired,

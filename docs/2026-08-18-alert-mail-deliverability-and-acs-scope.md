@@ -1,9 +1,7 @@
 # Alert mail deliverability + ACS role scope
 
-Raised 2026-08-18 after the customer dev audit: the alerts fire correctly (Sev2 delete-threshold
-and Sev4 digest both fired and resolved on 2026-08-17), but the mail landed in the
-recipient's **spam** folder, and the Logic App identity holds **Contributor** on the ACS
-resource.
+Deployment considerations: alert email may land in the recipient's **spam** folder,
+and the Logic App identity may hold **Contributor** on the ACS resource.
 
 ## 1. Deliverability
 
@@ -12,22 +10,18 @@ That domain has no relationship to the customer, no customer SPF/DKIM alignment,
 reputation. Exchange Online routinely junks it. This is a property of the sender domain, not
 a tunable — no ACS-side setting fixes it.
 
-**Decision (2026-08-18, Adam): Option A.** Option B is the fallback offered to customers
-without Exchange Online. Option C stays documented as a stopgap and is not being used.
-
-### Option A — reuse an Exchange-Online-verified domain (no DNS work) — CHOSEN
+### Option A — reuse an Exchange-Online-verified domain (no DNS work)
 `email_domain_management = "CustomerManagedInExchangeOnline"` with
 `email_custom_domain_name = "example.org"`. ACS accepts a domain already verified
 in the customer's M365 tenant; existing SPF/DKIM apply. Sender becomes
 `DoNotReply@example.org`.
 
-Verified 2026-08-18 against the customer tenant — Graph `/v1.0/domains` reports
-`example.org` with `isVerified: true` and `supportedServices` including `Email`,
-so the prerequisite is already met. (`alternate.example.org` is likewise verified for Email
-if customer would rather keep automation mail off the primary domain.)
+Before deployment, verify the chosen domain in the target tenant using Graph
+`/v1.0/domains`; check `isVerified` and `supportedServices` for email support.
+The example domain above is a placeholder, not a verified tenant domain.
 
 Cutover steps:
-1. A customer tenant admin authorizes the ACS-to-Exchange-Online domain connection once — this is
+1. A tenant admin authorizes the ACS-to-Exchange-Online domain connection once — this is
    a tenant-side consent, not something Terraform performs.
 2. Apply with the two variables above. The `AzureManagedDomain` resource is replaced by the
    customer-managed one, so expect a destroy/create on the domain and its association.
@@ -39,7 +33,7 @@ Terraform outputs `email_domain_verification_records`; the customer publishes th
 records, then verification completes. Keeps automation mail off the primary domain's
 reputation. Costs a DNS change request.
 
-### Option C — transport-rule allowlist (stopgap only, not chosen)
+### Option C — transport-rule allowlist (stopgap only)
 Exchange Online mail-flow rule bypassing spam filtering for the exact
 `<guid>.azurecomm.net` sender. Fast, but it is an allowlist entry for a shared Microsoft
 domain — weaker than A or B and worth retiring once one of them lands. Acceptable to unblock

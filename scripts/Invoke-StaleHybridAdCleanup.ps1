@@ -6,11 +6,10 @@
 .DESCRIPTION
     Companion to Invoke-StaleDeviceCleanup (Azure Automation). The cloud runbook
     cannot durably disable or delete hybrid-joined devices: Entra Connect
-    re-syncs accountEnabled from the on-prem computer account, which reverted
-    all 93 hybrid disables at example customer within one day (verified
-    2026-08-19, evidence/customer-prod-delete-pass-20260819/FINDINGS.md).
+    re-syncs accountEnabled from the on-prem computer account, which can revert
+    cloud-side disables on the next sync cycle.
 
-    Candidate selection is AD-native (customer direction, 2026-08-19): staleness
+    Candidate selection is AD-native: staleness
     is judged from lastLogonTimestamp AND pwdLastSet, not from cloud telemetry.
     Cleanup flow per surface:
         AD (this script) -> Entra Connect sync disables/removes the Entra
@@ -90,7 +89,7 @@
     Live pass 1: disables + stamps. Re-run after the window for the delete pass.
 
 .NOTES
-    Author: CDW (Adam Gell) - example customer engagement, 2026-08-19.
+    Author: Adam Gell.
     Safety: mutating-guarded (DryRun default + SupportsShouldProcess).
 #>
 [CmdletBinding(SupportsShouldProcess)]
@@ -262,8 +261,8 @@ foreach ($computer in $computers) {
         # Computer objects are often NOT leaf objects: BitLocker recovery info
         # (msFVE-RecoveryInformation) and service connection points live under
         # them, and Remove-ADComputer refuses non-leaf objects ("can perform
-        # the requested operation only on a leaf object" -- hit live at customer,
-        # 77 of 95, 2026-08-19). Children are enumerated and recorded, then
+        # the requested operation only on a leaf object").
+        # Children are enumerated and recorded, then
         # the subtree is removed; the AD Recycle Bin retains parent AND
         # children, so recovery of the whole object stays possible.
         $children = @(Get-ADObject -Filter '*' -SearchBase $computer.DistinguishedName -SearchScope OneLevel @adCommon)
@@ -300,4 +299,4 @@ $results | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
 Write-Log "Results written to $OutputPath"
 if ($DryRun) { Write-Log 'DryRun was ON -- re-run with -DryRun:$false to act.' -Level WARN }
 Write-Log 'Propagation: Entra Connect applies the AD state on its next cycle (Entra device object follows); Intune records for deleted devices are removed by the Intune device cleanup rule.'
-Write-Log 'TODO (agreed 2026-08-19): later revision posts this summary/log back to the automation service.'
+Write-Log 'TODO: later revision posts this summary/log back to the automation service.'

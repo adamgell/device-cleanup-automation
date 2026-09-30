@@ -190,9 +190,8 @@ tfvars file if you apply more than one from this directory.
 
 ## Hybrid-joined devices: `HybridDeviceHandling`
 
-Field finding (example customer, 2026-08-19): **cloud-side disable does not stick on
-hybrid-joined devices.** Entra Connect re-syncs `accountEnabled` from the on-prem computer
-account, and 93 of 93 hybrid (`ServerAd`) disables reverted within a day. A cloud-side delete of
+**Cloud-side disable can be reverted on hybrid-joined devices.** Entra Connect
+re-syncs `accountEnabled` from the on-prem computer account for hybrid (`ServerAd`) devices. A cloud-side delete of
 a synced object is likewise expected to be recreated while the AD computer account remains in
 sync scope. The durable path for hybrid devices is on-premises: act in AD (see
 `scripts/Invoke-StaleHybridAdCleanup.ps1`), let sync propagate to Entra, and let the Intune

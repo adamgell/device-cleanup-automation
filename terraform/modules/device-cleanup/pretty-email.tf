@@ -28,8 +28,7 @@ locals {
   # The alert's evaluation window can still contain an EARLIER run's counters,
   # so "latest run in the last 6h" is not necessarily the run that tripped the
   # rule. Anchoring every lookup at or before firedDateTime makes the email
-  # describe the run that actually fired it. (Seen 2026-08-17: the 19:21 alert
-  # was raised on the 19:05 run's ToDelete=142 while the 19:17 run showed 30.)
+  # describe the run that actually fired it.
   pe_fired = "coalesce(triggerBody()?['data']?['essentials']?['firedDateTime'], utcNow())"
 
   pe_alert_id   = "toLower(coalesce(triggerBody()?['data']?['essentials']?['alertId'], ''))"
@@ -96,7 +95,7 @@ locals {
         </div>
       </div>
       <div style="padding:12px 24px;border-top:1px solid #eeeeee;font-size:12px;color:#999999">
-        Automated message from the example customer device cleanup automation.
+        Automated message from the device cleanup automation.
         A dry run reports what it <i>would</i> do and changes nothing.
       </div>
     </div>
