@@ -196,12 +196,22 @@ $requiredModules = @(
     'Microsoft.Graph.Identity.SignIns'            # BitLocker recovery keys
 )
 if ($AuthMode -ne 'ManagedIdentity' -and $script:UseAzureDataPlane) { $requiredModules += 'Az.Accounts' }
-foreach ($m in $requiredModules) {
-    if (-not (Get-Module -ListAvailable -Name $m)) {
-        throw "Required module '$m' is not installed in this PowerShell environment. Install/import it before running."
+function Initialize-CleanupModules {
+    param([Parameter(Mandatory)] [string[]] $Names)
+    foreach ($name in $Names) {
+        if (-not (Get-Module -ListAvailable -Name $name)) {
+            Write-Log "Installing missing module '$name' from PSGallery for the current user..."
+            try {
+                Install-Module -Name $name -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+            } catch {
+                throw "Could not install required module '$name' from PSGallery. Check network access, PowerShellGet availability, and current-user module-folder permissions. $($_.Exception.Message)"
+            }
+        }
+        Write-Log "Importing module '$name'..."
+        Import-Module -Name $name -ErrorAction Stop | Out-Null
     }
-    Import-Module $m -ErrorAction Stop | Out-Null
 }
+Initialize-CleanupModules -Names $requiredModules
 
 #endregion
 

@@ -50,7 +50,10 @@ flowchart TD
 The maintained `runbook/Invoke-StaleDeviceCleanup.ps1` supports
 `-AuthMode ManagedIdentity` (default), `Delegated`, or `AppRegistration`.
 Existing Automation schedules continue to use managed identity. Use PowerShell 7.2+
-for local runs. Install the dependencies once:
+for local runs. The script checks for the required modules and automatically installs
+missing ones from PSGallery in `CurrentUser` scope before importing them. Existing
+modules are reused. This requires internet access and PowerShellGet; no administrator
+rights are needed for the installation. To preinstall the dependencies manually:
 
 ```powershell
 Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Identity.DirectoryManagement, Microsoft.Graph.Identity.SignIns, Az.Accounts -Scope CurrentUser
