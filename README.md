@@ -52,12 +52,21 @@ The maintained `runbook/Invoke-StaleDeviceCleanup.ps1` supports
 Existing Automation schedules continue to use managed identity. Use PowerShell 7.2+
 for local runs. The script checks for the required modules and automatically installs
 missing ones from PSGallery in `CurrentUser` scope before importing them. Existing
-modules are reused. This requires internet access and PowerShellGet; no administrator
+modules are reused. Graph submodules are aligned to one release: the version already
+loaded in the session, or the highest installed Authentication version in a fresh
+session. Missing matching submodules are installed automatically. This requires
+internet access and PowerShellGet; no administrator
 rights are needed for the installation. To preinstall the dependencies manually:
 
 ```powershell
 Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Identity.DirectoryManagement, Microsoft.Graph.Identity.SignIns, Az.Accounts -Scope CurrentUser
 ```
+
+If Graph reports "Assembly with same name is already loaded" or
+`SessionNotInitialized` after an import error, start a fresh `pwsh -NoProfile`
+process and rerun the downloaded script there. Installing another version or
+calling `Remove-Module` does not unload DLLs already loaded in the process.
+The script stops before sign-in if module initialization reports errors.
 
 Interactive user, Windows-only preview (no Key Vault required for this example):
 

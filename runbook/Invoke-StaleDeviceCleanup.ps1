@@ -198,17 +198,48 @@ $requiredModules = @(
 if ($AuthMode -ne 'ManagedIdentity' -and $script:UseAzureDataPlane) { $requiredModules += 'Az.Accounts' }
 function Initialize-CleanupModules {
     param([Parameter(Mandatory)] [string[]] $Names)
+    $graphVersion = $null
+    if ($Names -contains 'Microsoft.Graph.Authentication') {
+        $loadedGraph = @(Get-Module -Name 'Microsoft.Graph.*')
+        $loadedVersions = @($loadedGraph | Select-Object -ExpandProperty Version -Unique)
+        if ($loadedVersions.Count -gt 1) {
+            throw 'Multiple Graph module versions are already loaded. Start a fresh pwsh -NoProfile session and rerun the script.'
+        }
+        if ($loadedVersions.Count -eq 1) { $graphVersion = $loadedVersions[0] }
+        else {
+            $authModule = Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' | Sort-Object Version -Descending | Select-Object -First 1
+            if (-not $authModule) {
+                Write-Log 'Installing Microsoft.Graph.Authentication from PSGallery for the current user...'
+                Install-Module -Name Microsoft.Graph.Authentication -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+                $authModule = Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' | Sort-Object Version -Descending | Select-Object -First 1
+            }
+            if (-not $authModule) { throw 'Microsoft.Graph.Authentication is unavailable after installation.' }
+            $graphVersion = $authModule.Version
+        }
+        Write-Log "Using Microsoft.Graph module version $graphVersion."
+    }
     foreach ($name in $Names) {
-        if (-not (Get-Module -ListAvailable -Name $name)) {
+        $versionParameters = @{}
+        if ($name -like 'Microsoft.Graph.*' -and $graphVersion) { $versionParameters.RequiredVersion = [string]$graphVersion }
+        $available = @(Get-Module -ListAvailable -Name $name | Where-Object { -not $versionParameters.Count -or $_.Version -eq $graphVersion })
+        if (-not $available.Count) {
             Write-Log "Installing missing module '$name' from PSGallery for the current user..."
             try {
-                Install-Module -Name $name -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+                Install-Module -Name $name @versionParameters -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
             } catch {
                 throw "Could not install required module '$name' from PSGallery. Check network access, PowerShellGet availability, and current-user module-folder permissions. $($_.Exception.Message)"
             }
         }
         Write-Log "Importing module '$name'..."
-        Import-Module -Name $name -ErrorAction Stop | Out-Null
+        $importErrors = @()
+        try {
+            Import-Module -Name $name @versionParameters -ErrorAction Stop -ErrorVariable +importErrors | Out-Null
+            # Some module startup scripts override ErrorAction; do not continue
+            # after errors they emitted even if Import-Module returned normally.
+            if ($importErrors.Count) { throw ($importErrors | Out-String) }
+        } catch {
+            throw "Could not import '$name'. Cleanup has not started. If an assembly is already loaded, start a fresh pwsh -NoProfile session and rerun; Remove-Module cannot unload DLLs. $($_.Exception.Message)"
+        }
     }
 }
 Initialize-CleanupModules -Names $requiredModules
