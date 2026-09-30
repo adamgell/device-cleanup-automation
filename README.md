@@ -40,10 +40,76 @@ flowchart TD
     against the author's own copy); the Unified script contains the full tail.
 - `runbook/Invoke-StaleDeviceCleanup.ps1` — the Automation port. Original configuration
   options remain runbook parameters, with additional live safety requirements described below:
-  managed-identity auth, job-stream output, Key Vault secret backup with retention cleanup,
+  selectable authentication (managed identity by default), job-stream output, Key Vault secret backup with retention cleanup,
   and `-DeviceListBlobUrl` (blob CSV, same columns/semantics) replacing the local `-DeviceListCsv`.
 - `terraform/modules/device-cleanup/` — the reusable module.
 - `terraform/deployments/*.tfvars` — one file per customer/environment. New customer = new tfvars.
+
+## Running locally: interactive user or app registration
+
+The maintained `runbook/Invoke-StaleDeviceCleanup.ps1` supports
+`-AuthMode ManagedIdentity` (default), `Delegated`, or `AppRegistration`.
+Existing Automation schedules continue to use managed identity. Use PowerShell 7.2+
+for local runs. Install the dependencies once:
+
+```powershell
+Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Identity.DirectoryManagement, Microsoft.Graph.Identity.SignIns, Az.Accounts -Scope CurrentUser
+```
+
+Interactive user, Windows-only preview (no Key Vault required for this example):
+
+```powershell
+./runbook/Invoke-StaleDeviceCleanup.ps1 -AuthMode Delegated `
+    -TenantId '<tenant-id>' -OperatingSystemFilter Windows -BackupBLandLAPs $false
+```
+
+Add `-UseDeviceAuthentication` for device-code sign-in. An optional `-ClientId`
+selects your own public-client app for Graph delegated login; Azure data-plane
+login uses Azure PowerShell. Interactive mode is intended for a local console,
+not an unattended Automation schedule.
+
+App registration with a certificate installed with its private key in the local
+certificate store accessible to the running user:
+
+```powershell
+./runbook/Invoke-StaleDeviceCleanup.ps1 -AuthMode AppRegistration `
+    -TenantId '<tenant-id>' -ClientId '<application-id>' `
+    -CertificateThumbprint '<certificate-thumbprint>' `
+    -OperatingSystemFilter Windows -KeyVaultName '<vault-name>'
+```
+
+Or supply a client secret as a SecureString (do not put secrets in command lines,
+source, tfvars, or ordinary Automation job parameters):
+
+```powershell
+$secret = Read-Host 'App registration client secret' -AsSecureString
+./runbook/Invoke-StaleDeviceCleanup.ps1 -AuthMode AppRegistration `
+    -TenantId '<tenant-id>' -ClientId '<application-id>' -ClientSecret $secret `
+    -OperatingSystemFilter Windows -KeyVaultName '<vault-name>'
+```
+
+These examples retain `DryRun=true`. Live runs still require all existing
+[purge safety](docs/purge-safety.md) gates, including a vault and an explicitly
+approved device cohort. The reference scripts in `source/` remain unchanged.
+
+Permissions must be provisioned separately. App registrations need the six Graph
+**application** permissions listed in the runbook header, with admin consent.
+Interactive users request the corresponding **delegated** scopes and also need
+roles authorizing the requested device, Intune, BitLocker, and LAPS operations;
+a regular unprivileged account cannot perform administrative cleanup merely by
+signing in. See Microsoft's [Graph authentication guidance](https://learn.microsoft.com/en-us/powershell/microsoftgraph/authentication-commands).
+
+When backups, retention cleanup, or a blob list are enabled, the selected user or
+service principal also needs Azure data-plane access: `Key Vault Secrets Officer`
+on the backup vault and `Storage Blob Data Reader` for the input blob as applicable.
+Delegated mode can prompt twice (Graph and Azure); select the same user for both.
+`Az.Accounts` is only required for these data-plane operations in non-managed-identity
+modes. Authentication targets Azure public cloud. See [Azure sign-in](https://learn.microsoft.com/en-us/powershell/module/az.accounts/connect-azaccount)
+and [resource tokens](https://learn.microsoft.com/en-us/powershell/module/az.accounts/get-azaccesstoken).
+
+Offline validation: `pwsh -NoProfile -File tests/Test-Authentication.ps1` and
+`pwsh -NoProfile -File tests/Test-PurgeSafety.ps1`. These verify authentication
+routing and safety behavior with mocks; they do not prove tenant consent or RBAC.
 
 ## What Terraform creates (per environment)
 

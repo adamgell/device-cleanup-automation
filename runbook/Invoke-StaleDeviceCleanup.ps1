@@ -1,20 +1,20 @@
 <#
 .SYNOPSIS
     Two-stage stale-device cleanup for Entra ID -- Azure Automation runbook,
-    system-assigned managed identity auth.
+    managed identity, interactive user, or app registration auth.
 
 .DESCRIPTION
     Faithful port of Matt Kohut's Div-CleanupEntra-Intune-AP-Devices.ps1
     (delegated/interactive variant) for Azure Automation. All original
     configuration options are preserved as runbook parameters with the same
     defaults. Environment-forced changes only:
-      - Connect-MgGraph -Identity (managed identity) replaces interactive auth.
+      - Managed identity is the default; Delegated and AppRegistration are optional.
       - Transcript/CSV file outputs are replaced by job output streams.
       - BitLocker/LAPS backup writes to Azure Key Vault (one secret per device)
         instead of a local CSV, with opt-in retention cleanup. Secret
         material is NEVER written to the job output stream.
       - -DeviceListCsv is replaced by -DeviceListBlobUrl (same columns and
-        semantics, read from blob storage with the managed identity).
+        semantics, read from blob storage with the selected identity).
 
     The managed identity needs these Graph application permissions:
       Device.ReadWrite.All, Directory.Read.All, BitlockerKey.Read.All,
@@ -29,6 +29,15 @@
 #>
 
 param(
+    # --- Authentication (Azure public cloud) -----------------------------------
+    [Parameter()] [ValidateSet('ManagedIdentity', 'Delegated', 'AppRegistration')]
+    [string] $AuthMode = 'ManagedIdentity',
+    [Parameter()] [string] $TenantId = '',
+    [Parameter()] [string] $ClientId = '',
+    [Parameter()] [string] $CertificateThumbprint = '',
+    [Parameter()] [System.Security.SecureString] $ClientSecret,
+    [Parameter()] [switch] $UseDeviceAuthentication,
+
     # --- Run mode -------------------------------------------------------------
     [Parameter()] [bool]   $DryRun = $true,
     [Parameter()] [string] $ApprovedDeviceObjectIds = '',
@@ -164,14 +173,35 @@ if (-not $DryRun) {
 
 if ($ExcludedDeviceNamePattern) { [void][regex]::new($ExcludedDeviceNamePattern) }
 
+function Test-CleanupAuthentication {
+    if ($AuthMode -ne 'ManagedIdentity' -and [string]::IsNullOrWhiteSpace($TenantId)) {
+        throw '-TenantId is required for Delegated and AppRegistration authentication.'
+    }
+    if ($AuthMode -eq 'AppRegistration') {
+        if ([string]::IsNullOrWhiteSpace($ClientId) -or
+            ([bool]$CertificateThumbprint -eq [bool]$ClientSecret)) {
+            throw 'AppRegistration requires -ClientId and exactly one of -CertificateThumbprint or -ClientSecret.'
+        }
+        if ($UseDeviceAuthentication) { throw '-UseDeviceAuthentication requires Delegated authentication.' }
+    } elseif ($CertificateThumbprint -or $ClientSecret) {
+        throw 'Certificate and client secret parameters require AppRegistration authentication.'
+    }
+    if ($AuthMode -eq 'ManagedIdentity' -and ($TenantId -or $ClientId -or $UseDeviceAuthentication)) {
+        throw 'ManagedIdentity uses the system-assigned identity; omit tenant, client and interactive parameters.'
+    }
+}
+Test-CleanupAuthentication
+$script:UseAzureDataPlane = $BackupBLandLAPs -or $RunVaultRetentionCleanup -or [bool]$DeviceListBlobUrl
+
 $requiredModules = @(
     'Microsoft.Graph.Authentication',
     'Microsoft.Graph.Identity.DirectoryManagement',
     'Microsoft.Graph.Identity.SignIns'            # BitLocker recovery keys
 )
+if ($AuthMode -ne 'ManagedIdentity' -and $script:UseAzureDataPlane) { $requiredModules += 'Az.Accounts' }
 foreach ($m in $requiredModules) {
     if (-not (Get-Module -ListAvailable -Name $m)) {
-        throw "Required module '$m' is not available in this Automation account. Import it (see Terraform module_version variable)."
+        throw "Required module '$m' is not installed in this PowerShell environment. Install/import it before running."
     }
     Import-Module $m -ErrorAction Stop | Out-Null
 }
@@ -195,22 +225,74 @@ function Get-ManagedIdentityToken {
 
 #endregion
 
-#region Authenticate to Microsoft Graph
+#region Authenticate
+function Connect-CleanupServices {
+    Test-CleanupAuthentication
+    $graph = @{ NoWelcome = $true; ErrorAction = 'Stop'; ContextScope = 'Process' }
+    $azure = @{ Tenant = $TenantId; Scope = 'Process'; SkipContextPopulation = $true; ErrorAction = 'Stop' }
+    switch ($AuthMode) {
+        'ManagedIdentity' { $graph.Identity = $true }
+        'Delegated' {
+            $graph.TenantId = $TenantId
+            $graph.Scopes = @(
+                'Device.ReadWrite.All', 'Directory.Read.All', 'BitlockerKey.Read.All',
+                'DeviceLocalCredential.Read.All', 'DeviceManagementManagedDevices.ReadWrite.All',
+                'DeviceManagementServiceConfig.ReadWrite.All'
+            )
+            if ($ClientId) { $graph.ClientId = $ClientId }
+            if ($UseDeviceAuthentication) {
+                $graph.UseDeviceAuthentication = $true
+                $azure.UseDeviceAuthentication = $true
+            }
+        }
+        'AppRegistration' {
+            $graph.TenantId = $TenantId
+            $azure.ServicePrincipal = $true
+            if ($ClientSecret) {
+                $credential = [pscredential]::new($ClientId, $ClientSecret)
+                $graph.ClientSecretCredential = $credential
+                $azure.Credential = $credential
+            } else {
+                $graph.ClientId = $ClientId
+                $graph.CertificateThumbprint = $CertificateThumbprint
+                $azure.ApplicationId = $ClientId
+                $azure.CertificateThumbprint = $CertificateThumbprint
+            }
+        }
+    }
+    Connect-MgGraph @graph | Out-Null
+    $script:CleanupAzContext = $null
+    if ($AuthMode -ne 'ManagedIdentity' -and $script:UseAzureDataPlane) {
+        Disable-AzContextAutosave -Scope Process | Out-Null
+        $script:CleanupAzContext = Connect-AzAccount @azure
+        if (-not $script:CleanupAzContext) { throw 'Azure sign-in returned no context.' }
+        if ($AuthMode -eq 'Delegated' -and
+            $script:CleanupAzContext.Context.Account.Id -ne (Get-MgContext).Account) {
+            throw 'Sign into Graph and Azure with the same user account.'
+        }
+    }
+}
+
+function Get-CleanupResourceToken {
+    param([Parameter(Mandatory)] [string] $Resource)
+    if ($AuthMode -eq 'ManagedIdentity') { return Get-ManagedIdentityToken -Resource $Resource }
+    if (-not $script:CleanupAzContext) { throw 'Azure data-plane authentication is unavailable.' }
+    $result = Get-AzAccessToken -ResourceUrl $Resource -TenantId $TenantId -DefaultProfile $script:CleanupAzContext -ErrorAction Stop
+    if ($result.Token -is [System.Security.SecureString]) {
+        return [pscredential]::new('token', $result.Token).GetNetworkCredential().Password
+    }
+    return $result.Token
+}
 
 try {
-    Write-Log 'Connecting to Microsoft Graph with the system-assigned managed identity...'
-    Connect-MgGraph -Identity -NoWelcome -ErrorAction Stop
+    Write-Log "Connecting with authentication mode: $AuthMode"
+    Connect-CleanupServices
     $ctx = Get-MgContext
     Write-Log "Connected. Account: $($ctx.Account)  ClientId: $($ctx.ClientId)  AuthType: $($ctx.AuthType)"
-    # Delegated-scope sanity check from the original does not apply: app-role
-    # grants are fixed at deploy time. A missing role surfaces as a 403 on the
-    # affected call; the Terraform module is the source of truth for grants.
-}
-catch {
-    Write-Log "Failed to connect to Graph: $_" -Level ERROR
+} catch {
+    Write-Log 'Authentication failed; cleanup has not started.' -Level ERROR
     throw
 }
-
 #endregion
 
 #region Query stale devices
@@ -369,7 +451,7 @@ function Get-DeviceLapsCredentials {
 $script:_kvToken = $null
 function Get-KeyVaultAuthHeader {
     if (-not $script:_kvToken) {
-        $script:_kvToken = Get-ManagedIdentityToken -Resource 'https://vault.azure.net'
+        $script:_kvToken = Get-CleanupResourceToken -Resource 'https://vault.azure.net'
     }
     return @{ Authorization = "Bearer $($script:_kvToken)" }
 }
@@ -781,7 +863,7 @@ $script:CleanupManagedDevices=$null
 function Get-DeviceListFromBlob {
     param([Parameter(Mandatory)] [string] $BlobUrl)
 
-    $token = Get-ManagedIdentityToken -Resource 'https://storage.azure.com/'
+    $token = Get-CleanupResourceToken -Resource 'https://storage.azure.com/'
     $headers = @{
         Authorization  = "Bearer $token"
         'x-ms-version' = '2021-08-06'

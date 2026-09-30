@@ -1,4 +1,5 @@
 $ErrorActionPreference='Stop'
+$AuthMode='ManagedIdentity';$TenantId='';$ClientId='';$CertificateThumbprint='';$ClientSecret=$null;$UseDeviceAuthentication=$false
 $path=Join-Path $PSScriptRoot '../runbook/Invoke-StaleDeviceCleanup.ps1'
 $source=Get-Content $path -Raw
 $t=$null;$e=$null;$ast=[System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$t,[ref]$e)
